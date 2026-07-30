@@ -1,0 +1,25 @@
+[mod]
+name = "Glacier Workstation"
+version = "1.0.0"
+description = "日常开发默认搭配：冰蓝钢 + Activity双行 + 2×2仪表盘 + Braille趋势图"
+scene = "daily-dev"
+
+[mod.layout]
+compact = "activity"
+dashboard = "grid-2x2"
+compact_lines = 2
+
+[mod.theme]
+preset = "nord"
+
+[mod.animation]
+enabled = true
+effects = ["gradient-bar", "panel-reveal", "braille-charts"]
+
+[mod.widgets.context_bar]
+bar_width = "18"
+gradient = "true"
+
+[mod.widgets.agent_overview]
+show_stalled = "true"
+stall_threshold_sec = "30"

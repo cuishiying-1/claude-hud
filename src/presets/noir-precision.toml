@@ -1,0 +1,17 @@
+[mod]
+name = "Noir Precision"
+version = "1.0.0"
+description = "零装饰极简 · 注意力至上 · 所有信息在单行扫描完成"
+scene = "daily-dev"
+
+[mod.layout]
+compact = "minimal"
+dashboard = "grid-2x2"
+compact_lines = 1
+
+[mod.theme]
+preset = "monochrome"
+
+[mod.animation]
+enabled = false
+effects = []

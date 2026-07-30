@@ -1,0 +1,48 @@
+[package]
+name = "claude-hud"
+version = "0.1.0"
+edition = "2021"
+description = "Dual-mode terminal HUD for Claude Code: compact status bar + full-screen TUI dashboard"
+license = "MIT"
+repository = "https://github.com/user/claude-hud"
+
+[[bin]]
+name = "claude-hud"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Terminal
+crossterm = "0.28"
+ratatui = "0.29"
+
+# Configuration
+toml = "0.8"
+
+# Scripting (Phase 3)
+rhai = "1"
+
+# HTTP (Phase 3: web dashboard + http polling)
+ureq = "2"
+tiny_http = "0.12"
+
+# Database (Phase 2)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# OS notifications (Phase 2)
+notify-rust = "4"
+
+# Filesystem
+dirs = "5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

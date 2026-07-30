@@ -1,0 +1,21 @@
+[mod]
+name = "Matrix Surveillance"
+version = "1.0.0"
+description = "纯ASCII · 零依赖 · CRT扫描线 · 任何终端完美运行 · SSH友好"
+scene = "ssh-remote"
+
+[mod.layout]
+compact = "activity"
+dashboard = "focus"
+compact_lines = 2
+
+[mod.theme]
+preset = "monochrome"
+
+[mod.animation]
+enabled = true
+effects = ["crt-scanlines"]
+
+[mod.widgets.context_bar]
+bar_width = "20"
+gradient = "false"

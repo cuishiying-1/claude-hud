@@ -1,0 +1,108 @@
+use std::collections::HashSet;
+use std::sync::Mutex;
+
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::Paragraph;
+
+use crate::core::ansi;
+use crate::core::session::SessionData;
+use crate::core::theme::{IconSet, Theme};
+use crate::core::transcript::TranscriptSummary;
+use crate::core::widget::{Widget, WidgetConfig};
+
+pub struct SkillsMcpDynamic {
+    summary: Mutex<Option<TranscriptSummary>>,
+}
+
+impl SkillsMcpDynamic {
+    pub fn new() -> Self {
+        Self { summary: Mutex::new(None) }
+    }
+}
+
+impl Widget for SkillsMcpDynamic {
+    fn id(&self) -> &str { "skills_mcp_dynamic" }
+
+    fn display_name(&self) -> &str { "Skills & MCP Dynamic" }
+
+    fn render_compact(&self, _data: &SessionData, theme: &Theme, _config: &WidgetConfig) -> String {
+        let mut parts = vec![];
+        if let Ok(ref guard) = self.summary.lock() {
+            if let Some(ref summary) = **guard {
+                let active_skills: Vec<&str> = summary.skill_calls.iter()
+                    .filter(|s| s.is_active).map(|s| s.name.as_str()).collect();
+                if !active_skills.is_empty() {
+                    parts.push(ansi::ansi_fg(
+                        &format!("{} {}", skill_icon(theme), active_skills.join(" ")),
+                        &theme.skill_color));
+                }
+                let unique_mcps: Vec<&str> = {
+                    let mut seen = HashSet::new();
+                    summary.mcp_calls.iter()
+                        .map(|m| m.server.as_str())
+                        .filter(|s| seen.insert(s))
+                        .collect()
+                };
+                if !unique_mcps.is_empty() {
+                    parts.push(ansi::ansi_fg(
+                        &format!("{} {}", mcp_icon(theme), unique_mcps.join(" ")),
+                        &theme.mcp_color));
+                }
+            }
+        }
+        parts.join(" │ ")
+    }
+
+    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, _config: &WidgetConfig) {
+        let mut lines = vec![
+            Line::from(Span::styled("Skills & MCP — Dynamic",
+                Style::default().fg(ansi::parse_ratatui_color(&theme.accent)))),
+        ];
+        if let Ok(ref guard) = self.summary.lock() {
+            if let Some(ref summary) = **guard {
+                if !summary.skill_calls.is_empty() {
+                    lines.push(Line::from(Span::styled("Skills:",
+                        Style::default().fg(ansi::parse_ratatui_color(&theme.skill_color)))));
+                    for skill in &summary.skill_calls {
+                        let icon = if skill.is_active { "●" } else { "○" };
+                        lines.push(Line::from(format!("  {} {} ({} calls)", icon, skill.name, skill.call_count)));
+                    }
+                }
+                if !summary.mcp_calls.is_empty() {
+                    lines.push(Line::from(Span::styled("MCP:",
+                        Style::default().fg(ansi::parse_ratatui_color(&theme.mcp_color)))));
+                    let mut server_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    for call in &summary.mcp_calls {
+                        *server_counts.entry(call.server.clone()).or_default() += call.call_count;
+                    }
+                    for (server, count) in &server_counts {
+                        lines.push(Line::from(format!("  ◆ {} ({} calls)", server, count)));
+                    }
+                }
+                frame.render_widget(Paragraph::new(Text::from(lines)), area);
+                return;
+            }
+        }
+        lines.push(Line::from("No dynamic data"));
+        frame.render_widget(Paragraph::new(Text::from(lines)), area);
+    }
+
+    fn dashboard_size(&self) -> (u16, u16) { (25, 5) }
+
+    fn update_transcript(&self, summary: &TranscriptSummary) {
+        if let Ok(ref mut guard) = self.summary.lock() {
+            **guard = Some(summary.clone());
+        }
+    }
+}
+
+fn skill_icon(theme: &Theme) -> &str {
+    match theme.icon_set { IconSet::Nerd => "🧩", IconSet::Ascii => "[SK]", IconSet::Minimal => "◇" }
+}
+
+fn mcp_icon(theme: &Theme) -> &str {
+    match theme.icon_set { IconSet::Nerd => "🔌", IconSet::Ascii => "[MC]", IconSet::Minimal => "◆" }
+}

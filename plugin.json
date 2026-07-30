@@ -1,0 +1,43 @@
+{
+  "name": "claude-hud",
+  "version": "0.1.0",
+  "description": "Dual-mode terminal HUD for Claude Code: compact status bar + full-screen TUI dashboard with agent observability, token attribution, and theme engine",
+  "author": "openlibing",
+  "license": "MIT",
+  "repository": "https://github.com/openlibing/claude-hud",
+  "homepage": "https://github.com/openlibing/claude-hud#readme",
+  "keywords": [
+    "statusline",
+    "dashboard",
+    "monitoring",
+    "tui",
+    "agent-observability",
+    "token-tracking",
+    "themes",
+    "rust"
+  ],
+  "categories": ["developer-tools", "monitoring"],
+  "minimum_claude_code_version": "1.0.80",
+  "platforms": ["macos", "linux", "windows"],
+
+  "installation": {
+    "type": "binary",
+    "build_from_source": {
+      "command": "cargo install --path .",
+      "requirements": ["rust >= 1.75"]
+    }
+  },
+
+  "setup": {
+    "command": "claude-hud setup",
+    "description": "Auto-configure Claude Code status line and create default config"
+  },
+
+  "defaultSettings": {
+    "statusLine": {
+      "type": "command",
+      "command": "claude-hud render",
+      "refreshInterval": 5
+    }
+  }
+}
