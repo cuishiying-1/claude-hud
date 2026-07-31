@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use crate::core::ansi;
 use crate::core::config::AppConfig;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
@@ -16,9 +15,19 @@ pub fn render(
     let stdin_data = read_stdin()?;
     let data = SessionData::from_stdin_json(&stdin_data)
         .map_err(|e| format!("parse stdin JSON: {}", e))?;
+    render_with_data(&data, registry, config, theme)
+}
 
+/// Render the compact status bar from an already-parsed session snapshot.
+/// Shared by `render` (stdin) and `doctor` (sample data).
+pub fn render_with_data(
+    data: &SessionData,
+    registry: &WidgetRegistry,
+    config: &AppConfig,
+    theme: &Theme,
+) -> Result<String, String> {
     // Phase 2: parse transcript and push to all widgets
-    parse_and_push_transcript(&data, registry);
+    parse_and_push_transcript(data, registry);
 
     let layout = &config.compact_layout;
     if layout.is_empty() {
@@ -50,7 +59,7 @@ pub fn render(
             .filter_map(|id| {
                 let w = registry.get(id)?;
                 let widget_config = config.widget_config(id);
-                let rendered = w.render_compact(&data, theme, &widget_config);
+                let rendered = w.render_compact(data, theme, &widget_config);
                 if rendered.is_empty() {
                     None
                 } else {

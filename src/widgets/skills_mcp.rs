@@ -17,9 +17,11 @@ impl Widget for SkillsMcp {
         let sc = std::env::var("CLAUDE_HUD_SKILL_COUNT").ok().and_then(|v| v.parse().ok()).unwrap_or(0usize);
         let mc = std::env::var("CLAUDE_HUD_MCP_COUNT").ok().and_then(|v| v.parse().ok()).unwrap_or(0usize);
         let si = match theme.icon_set {
+            IconSet::Auto => "◇ ",         // 防御分支：所有渲染入口均已先决议 icon_set，此处正常不可达
             IconSet::Nerd => "🧩 ", IconSet::Ascii => "[SK] ", IconSet::Minimal => "◇ ",
         };
         let mi = match theme.icon_set {
+            IconSet::Auto => "◆ ",         // 防御分支：所有渲染入口均已先决议 icon_set，此处正常不可达
             IconSet::Nerd => "🔌 ", IconSet::Ascii => "[MC] ", IconSet::Minimal => "◆ ",
         };
         format!("{}{} {}{}",

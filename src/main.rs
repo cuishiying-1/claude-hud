@@ -1,18 +1,20 @@
 mod compact;
 mod core;
 mod dashboard;
+mod doctor;
 mod notify;
 mod probe;
 mod serve;
 mod widgets;
 
 use clap::{Parser, Subcommand};
+use core::cc_config;
 use core::config::AppConfig;
 use core::theme::Theme;
 use core::widget::WidgetRegistry;
 
 #[derive(Parser)]
-#[command(name = "claude-hud")]
+#[command(name = "claude-hud", version)]
 #[command(about = "Dual-mode terminal HUD for Claude Code")]
 struct Cli {
     #[command(subcommand)]
@@ -29,6 +31,10 @@ enum Commands {
     Serve,
     /// Auto-configure Claude Code settings.json
     Setup,
+    /// Remove statusLine from Claude Code settings and delete config dir
+    Uninstall,
+    /// Run self-checks and print a health report
+    Doctor,
     /// Mod management
     #[command(subcommand)]
     Mod(ModCommands),
@@ -100,7 +106,8 @@ fn main() {
     let cli = Cli::parse();
 
     let config = AppConfig::load().unwrap_or_default();
-    let theme = load_theme(&config);
+    let mut theme = load_theme(&config);
+    theme.icon_set = theme.resolve_icon_set();
     let mut registry = WidgetRegistry::new();
     widgets::register_all(&mut registry);
     widgets::register_script_widgets(&mut registry, &config);
@@ -125,6 +132,8 @@ fn main() {
             Box::leak(Box::new(theme.clone())),
         ),
         Commands::Setup => run_setup(),
+        Commands::Uninstall => run_uninstall(),
+        Commands::Doctor => doctor::run(&registry, &config, &theme),
         Commands::Mod(cmd) => handle_mod(cmd, &config),
         Commands::Theme(cmd) => handle_theme(cmd, &config),
         Commands::Widget(cmd) => handle_widget(cmd, &registry),
@@ -163,12 +172,22 @@ fn inject_probe_env() {
     std::env::set_var("CLAUDE_HUD_MCP_COUNT", mcp_count.to_string());
 }
 
+/// Write atomically (temp file + rename) so a crash mid-write never
+/// leaves settings.json truncated or partially written.
+fn write_atomic(path: &std::path::Path, content: &str) -> Result<(), String> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, content)
+        .map_err(|e| format!("write {}: {}", tmp.display(), e))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| format!("rename to {}: {}", path.display(), e))?;
+    Ok(())
+}
+
 fn run_setup() -> Result<(), String> {
     let config_path = AppConfig::config_path()?;
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {}", e))?;
     }
-    // Write default config if not exists
     if !config_path.exists() {
         let default_config = toml::to_string_pretty(&AppConfig::default())
             .map_err(|e| format!("serialize config: {}", e))?;
@@ -178,27 +197,73 @@ fn run_setup() -> Result<(), String> {
     } else {
         println!("Config already exists at {:?}", config_path);
     }
+    setup_cc_settings()?;
+    Ok(())
+}
 
-    // Write Claude Code settings.json
-    if let Some(home) = dirs::home_dir() {
-        let cc_settings = home.join(".claude").join("settings.json");
-        let status_line_config = r#"{
-  "statusLine": {
-    "type": "command",
-    "command": "claude-hud render",
-    "refreshInterval": 5
-  }
-}"#;
-        if !cc_settings.exists() {
-            std::fs::write(&cc_settings, status_line_config)
-                .map_err(|e| format!("write claude settings: {}", e))?;
-            println!("Claude Code status line configured.");
-        } else {
-            println!("Claude Code settings.json already exists. Add this manually:");
-            println!("{}", status_line_config);
-        }
+/// Merge the HUD statusLine into ~/.claude/settings.json, backing up
+/// the original content first. Invalid existing JSON is backed up and
+/// rebuilt from {} rather than overwriting user data.
+fn setup_cc_settings() -> Result<(), String> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| "cannot find home directory".to_string())?;
+    let settings_path = home.join(".claude").join("settings.json");
+    let original = if settings_path.exists() {
+        std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("read settings.json: {}", e))?
+    } else {
+        String::new()
+    };
+
+    if !original.trim().is_empty() {
+        let backup = settings_path.with_extension("json.bak");
+        std::fs::write(&backup, &original)
+            .map_err(|e| format!("backup settings.json: {}", e))?;
+        println!("Backup saved to {:?}", backup);
     }
 
+    let merged = match cc_config::merge_status_line(&original) {
+        Ok(m) => m,
+        Err(e) => {
+            let backup = settings_path.with_extension("json.bak");
+            eprintln!(
+                "warning: {} — original saved to {:?}; rebuilding with minimal config (restore other settings from the backup)",
+                e, backup
+            );
+            cc_config::merge_status_line("")?
+        }
+    };
+    write_atomic(&settings_path, &merged)?;
+    println!("Claude Code status line configured in {:?}", settings_path);
+    Ok(())
+}
+
+fn run_uninstall() -> Result<(), String> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| "cannot find home directory".to_string())?;
+    let settings_path = home.join(".claude").join("settings.json");
+    if settings_path.exists() {
+        let content = std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("read settings.json: {}", e))?;
+        match cc_config::remove_status_line(&content) {
+            Ok(updated) => {
+                if updated != content {
+                    write_atomic(&settings_path, &updated)?;
+                    println!("Removed statusLine from {:?}", settings_path);
+                } else {
+                    println!("No statusLine found in {:?}; nothing to remove", settings_path);
+                }
+            }
+            Err(e) => eprintln!("warning: skip settings.json cleanup ({})", e),
+        }
+    }
+    let config_dir = home.join(".claude").join("plugins").join("claude-hud");
+    if config_dir.exists() {
+        std::fs::remove_dir_all(&config_dir)
+            .map_err(|e| format!("remove config dir: {}", e))?;
+        println!("Removed config dir {:?}", config_dir);
+    }
+    println!("Done. The claude-hud binary can now be safely deleted.");
     Ok(())
 }
 
@@ -376,7 +441,8 @@ fn handle_widget(cmd: WidgetCommands, registry: &WidgetRegistry) -> Result<(), S
         }
         WidgetCommands::Test { name } => {
             if let Some(w) = registry.get(&name) {
-                let theme = Theme::default();
+                let mut theme = Theme::default();
+                theme.icon_set = theme.resolve_icon_set();
                 let config = crate::core::widget::WidgetConfig::default();
                 let data = crate::core::session::SessionData::default();
                 let output = w.render_compact(&data, &theme, &config);

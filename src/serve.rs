@@ -26,14 +26,18 @@ pub fn run(
         match url.as_str() {
             "/" | "/index.html" => {
                 let html = build_dashboard_html(registry, config, theme);
-                let response = Response::from_string(html)
-                    .with_header("Content-Type: text/html; charset=utf-8".parse().unwrap());
+                let header = "Content-Type: text/html; charset=utf-8"
+                    .parse::<tiny_http::Header>()
+                    .unwrap();
+                let response = Response::from_string(html).with_header(header);
                 let _ = request.respond(response);
             }
             "/api/data" => {
                 let json = build_api_json(registry, config, theme);
-                let response = Response::from_string(json)
-                    .with_header("Content-Type: application/json".parse().unwrap());
+                let header = "Content-Type: application/json"
+                    .parse::<tiny_http::Header>()
+                    .unwrap();
+                let response = Response::from_string(json).with_header(header);
                 let _ = request.respond(response);
             }
             "/api/health" => {

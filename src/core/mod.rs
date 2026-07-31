@@ -7,3 +7,4 @@ pub mod session;
 pub mod theme;
 pub mod transcript;
 pub mod widget;
+pub mod cc_config;

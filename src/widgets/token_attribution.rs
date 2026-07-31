@@ -48,7 +48,8 @@ impl Widget for TokenAttribution {
         lines.push(Line::from(Span::styled("Token Attribution",
             Style::default().fg(ansi::parse_ratatui_color(&theme.accent)))));
 
-        if let Ok(ref guard) = self.summary.lock() {
+        let lock = self.summary.lock();
+        if let Ok(ref guard) = lock {
             if let Some(ref summary) = **guard {
                 let attr = summary.token_attribution();
                 let colors = [&theme.danger, &theme.warning, &theme.success, &theme.muted];

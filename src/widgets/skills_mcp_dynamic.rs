@@ -39,11 +39,11 @@ impl Widget for SkillsMcpDynamic {
                         &format!("{} {}", skill_icon(theme), active_skills.join(" ")),
                         &theme.skill_color));
                 }
-                let unique_mcps: Vec<&str> = {
+                let unique_mcps: Vec<String> = {
                     let mut seen = HashSet::new();
                     summary.mcp_calls.iter()
-                        .map(|m| m.server.as_str())
-                        .filter(|s| seen.insert(s))
+                        .map(|m| m.server.clone())
+                        .filter(|s| seen.insert(s.clone()))
                         .collect()
                 };
                 if !unique_mcps.is_empty() {
@@ -100,9 +100,15 @@ impl Widget for SkillsMcpDynamic {
 }
 
 fn skill_icon(theme: &Theme) -> &str {
-    match theme.icon_set { IconSet::Nerd => "🧩", IconSet::Ascii => "[SK]", IconSet::Minimal => "◇" }
+    match theme.icon_set {
+        IconSet::Auto => "◇",             // 防御分支：所有渲染入口均已先决议 icon_set，此处正常不可达
+        IconSet::Nerd => "🧩", IconSet::Ascii => "[SK]", IconSet::Minimal => "◇",
+    }
 }
 
 fn mcp_icon(theme: &Theme) -> &str {
-    match theme.icon_set { IconSet::Nerd => "🔌", IconSet::Ascii => "[MC]", IconSet::Minimal => "◆" }
+    match theme.icon_set {
+        IconSet::Auto => "◆",             // 防御分支：所有渲染入口均已先决议 icon_set，此处正常不可达
+        IconSet::Nerd => "🔌", IconSet::Ascii => "[MC]", IconSet::Minimal => "◆",
+    }
 }

@@ -6,6 +6,7 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::text::Text;
 use ratatui::Frame;
@@ -28,8 +29,8 @@ pub fn run(
     execute!(stdout, EnterAlternateScreen)
         .map_err(|e| format!("enter alt screen: {}", e))?;
 
-    let mut terminal =
-        ratatui::Terminal::new(io::stdout()).map_err(|e| format!("init terminal: {}", e))?;
+    let mut terminal = ratatui::Terminal::new(CrosstermBackend::new(io::stdout()))
+        .map_err(|e| format!("init terminal: {}", e))?;
 
     let result = run_loop(&mut terminal, registry, config, theme);
 
@@ -41,7 +42,7 @@ pub fn run(
 }
 
 fn run_loop(
-    terminal: &mut ratatui::Terminal<io::Stdout>,
+    terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
     registry: &WidgetRegistry,
     config: &AppConfig,
     theme: &Theme,

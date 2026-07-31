@@ -97,7 +97,8 @@ impl Widget for AgentDetail {
             Style::default().fg(ansi::parse_ratatui_color(&theme.accent)),
         )));
 
-        if let Ok(ref guard) = self.summary.lock() {
+        let lock = self.summary.lock();
+        if let Ok(ref guard) = lock {
             if let Some(ref summary) = **guard {
                 for agent in &summary.agents {
                     let is_stalled = agent
@@ -125,7 +126,7 @@ impl Widget for AgentDetail {
                         Span::raw(&agent.name),
                         Span::raw(" "),
                         Span::styled(
-                            &ansi::truncate(&agent.task_description, 50),
+                            ansi::truncate(&agent.task_description, 50),
                             Style::default().fg(ansi::parse_ratatui_color(&theme.muted)),
                         ),
                     ]);

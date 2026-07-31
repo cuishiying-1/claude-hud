@@ -41,13 +41,13 @@ fn default_bar_filled() -> char { '█' }
 fn default_bar_empty() -> char { '░' }
 fn default_separator() -> String { " │ ".into() }
 fn default_border_style() -> BorderStyle { BorderStyle::Rounded }
-fn default_icon_set() -> IconSet { IconSet::Nerd }
+fn default_icon_set() -> IconSet { IconSet::Auto }
 fn default_bar_width() -> u16 { 16 }
 fn default_padding() -> u16 { 1 }
 fn default_compact_lines() -> u8 { 2 }
 fn default_dashboard_grid() -> u8 { 2 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BorderStyle {
     Single,
@@ -57,9 +57,10 @@ pub enum BorderStyle {
     Hidden,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IconSet {
+    Auto,
     Nerd,
     Ascii,
     Minimal,
@@ -184,10 +185,133 @@ impl Theme {
             (sb as f64 + (eb as f64 - sb as f64) * t) as u8,
         ))
     }
+
+    /// Resolve Auto to a concrete set using the real font probe.
+    pub fn resolve_icon_set(&self) -> IconSet {
+        self.resolve_icon_set_with(detect_nerd_font())
+    }
+
+    /// Pure resolution: Auto -> Nerd iff a Nerd Font is installed,
+    /// otherwise Minimal. Explicit choices are never downgraded.
+    pub fn resolve_icon_set_with(&self, has_nerd_font: bool) -> IconSet {
+        match self.icon_set {
+            IconSet::Auto => {
+                if has_nerd_font {
+                    IconSet::Nerd
+                } else {
+                    IconSet::Minimal
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_icon_set_is_auto() {
+        assert!(matches!(Theme::default().icon_set, IconSet::Auto));
+    }
+
+    #[test]
+    fn auto_with_nerd_font_resolves_nerd() {
+        let theme = Theme::default();
+        assert!(matches!(theme.resolve_icon_set_with(true), IconSet::Nerd));
+    }
+
+    #[test]
+    fn auto_without_nerd_font_resolves_minimal() {
+        let theme = Theme::default();
+        assert!(matches!(theme.resolve_icon_set_with(false), IconSet::Minimal));
+    }
+
+    #[test]
+    fn explicit_nerd_is_never_downgraded() {
+        let mut theme = Theme::default();
+        theme.icon_set = IconSet::Nerd;
+        assert!(matches!(theme.resolve_icon_set_with(false), IconSet::Nerd));
+    }
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::nord()
+        Self {
+            bg: "#2e3440".into(),
+            fg: "#d8dee9".into(),
+            accent: "#88c0d0".into(),
+            success: "#a3be8c".into(),
+            warning: "#ebcb8b".into(),
+            danger: "#bf616a".into(),
+            muted: "#5e81ac".into(),
+            border: "#434c5e".into(),
+            skill_color: "#b48ead".into(),
+            mcp_color: "#d08770".into(),
+            model_color: "#88c0d0".into(),
+            bar_filled: default_bar_filled(),
+            bar_empty: default_bar_empty(),
+            separator: default_separator(),
+            border_style: default_border_style(),
+            icon_set: default_icon_set(),
+            bar_width: default_bar_width(),
+            padding: default_padding(),
+            compact_lines: default_compact_lines(),
+            dashboard_grid: default_dashboard_grid(),
+        }
     }
 }
+
+/// Probe whether a Nerd Font is installed. Never panics: any probe
+/// failure means "no Nerd Font" so callers fall back to Minimal.
+pub fn detect_nerd_font() -> bool {
+    detect_nerd_font_platform()
+}
+
+#[cfg(target_os = "windows")]
+fn detect_nerd_font_platform() -> bool {
+    let output = std::process::Command::new("reg")
+        .args(["query", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"])
+        .output();
+    match output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .to_lowercase()
+            .contains("nerd"),
+        Err(_) => false,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn detect_nerd_font_platform() -> bool {
+    let output = std::process::Command::new("fc-list").output();
+    match output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .to_lowercase()
+            .contains("nerd"),
+        Err(_) => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn detect_nerd_font_platform() -> bool {
+    let mut dirs: Vec<std::path::PathBuf> = vec![
+        "/System/Library/Fonts".into(),
+        "/Library/Fonts".into(),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join("Library").join("Fonts"));
+    }
+    dirs.iter().any(|dir| {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.file_name().to_string_lossy().to_lowercase().contains("nerd"))
+            })
+            .unwrap_or(false)
+    })
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+fn detect_nerd_font_platform() -> bool { false }

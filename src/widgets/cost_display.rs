@@ -18,7 +18,12 @@ impl Widget for CostDisplay {
         let cost = data.cost.total_cost_usd;
         let warn = config.get_f64("warn_threshold_usd", 10.0);
         let color = if cost >= warn { &theme.warning } else { &theme.success };
-        format!("{}{:.2}{}", ansi::ansi_fg(symbol, color), cost, ansi::ansi_reset())
+        format!(
+            "{}{:.2}{}",
+            ansi::ansi_fg(&symbol, color),
+            cost,
+            ansi::ansi_reset()
+        )
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, _config: &WidgetConfig) {

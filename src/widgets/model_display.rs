@@ -16,6 +16,7 @@ impl Widget for ModelDisplay {
     fn render_compact(&self, data: &SessionData, theme: &Theme, _config: &WidgetConfig) -> String {
         let name = &data.model.display_name;
         let (icon, suffix) = match theme.icon_set {
+            IconSet::Auto => ("> ", ""),   // 防御分支：所有渲染入口均已先决议 icon_set，此处正常不可达
             IconSet::Nerd | IconSet::Minimal => ("▸ ", ""),
             IconSet::Ascii => ("[", "]"),
         };

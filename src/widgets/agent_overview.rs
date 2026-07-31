@@ -14,7 +14,8 @@ impl Widget for AgentOverview {
     fn display_name(&self) -> &str { "Agent Overview" }
 
     fn render_compact(&self, data: &SessionData, theme: &Theme, config: &WidgetConfig) -> String {
-        let agents = data.subagent_status_line.as_ref().map(|s| &s.agents).unwrap_or(&vec![]);
+        let empty_agents = Vec::new();
+        let agents = data.subagent_status_line.as_ref().map(|s| &s.agents).unwrap_or(&empty_agents);
         if agents.is_empty() { return String::new(); }
         let total = agents.len();
         let active = agents.iter().filter(|a| a.is_active).count();
@@ -33,7 +34,8 @@ impl Widget for AgentOverview {
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, _config: &WidgetConfig) {
-        let agents = data.subagent_status_line.as_ref().map(|s| &s.agents).unwrap_or(&vec![]);
+        let empty_agents = Vec::new();
+        let agents = data.subagent_status_line.as_ref().map(|s| &s.agents).unwrap_or(&empty_agents);
         let total = agents.len();
         let active = agents.iter().filter(|a| a.is_active).count();
         let done = total - active;

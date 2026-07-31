@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 /// Full session data ingested from Claude Code status line stdin JSON.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct SessionData {
     pub model: ModelInfo,
     pub context_window: ContextWindow,
@@ -14,20 +14,21 @@ pub struct SessionData {
     pub subagent_status_line: Option<SubagentStatusLine>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub display_name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ContextWindow {
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub used_percentage: f64,
     pub total_input_tokens: u64,
     #[serde(default)]
     pub total_output_tokens: u64,
     pub context_window_size: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub current_usage: CurrentUsage,
 }
 
@@ -43,7 +44,7 @@ pub struct CurrentUsage {
     pub cache_read_input_tokens: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CostInfo {
     pub total_cost_usd: f64,
     pub total_duration_ms: u64,
@@ -90,4 +91,16 @@ impl SessionData {
     pub fn from_stdin_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
     }
+}
+
+/// Treat explicit JSON `null` as the field's default value.
+///
+/// Claude Code may send `null` for usage fields (e.g. at session start);
+/// `#[serde(default)]` alone only covers missing fields, not `null`.
+fn deserialize_null_as_default<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Deserialize<'de> + Default,
+    D: serde::Deserializer<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
