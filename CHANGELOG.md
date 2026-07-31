@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- 安装使用流程简化：一键安装/卸载脚本、`setup` 自动合并、`uninstall`/`doctor` 子命令、`icon_set = "auto"` 零依赖字体决议
+
 ## v0.1.0 (unreleased)
 
 ### Phase 1 — Core Skeleton

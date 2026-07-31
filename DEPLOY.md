@@ -8,51 +8,46 @@ Claude HUD 是 Claude Code 的双模终端可视化插件：紧凑状态栏（�
 
 ## 快速开始
 
-### 1. 安装 Rust
+### 一键安装（推荐，无需 Rust）
 
 ```bash
-# 国内镜像加速
-export RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static
-export RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source ~/.cargo/env
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/install.sh | bash
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/install.ps1 | iex
 ```
 
-### 2. 编译
+安装器自动完成：下载预编译二进制 → 加入 PATH → 运行 `claude-hud setup`（合并 statusLine 到 `~/.claude/settings.json`）。
+
+重启 Claude Code 或执行 `/reload-plugins`，状态栏底部应出现 HUD 显示。
+
+### 一键卸载
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/uninstall.sh | bash
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/uninstall.ps1 | iex
+```
+
+### 从源码构建（开发者）
 
 ```bash
 cd claude-hud
 cargo build --release
 # 二进制位置：target/release/claude-hud
-
-# 可选：安装到 PATH
-cargo install --path .
+cargo install --path .   # 可选：安装到 PATH
 ```
 
-### 3. 一键配置 Claude Code
+### 自检
 
 ```bash
-claude-hud setup
+claude-hud doctor
 ```
 
-自动完成：
-- 在 `~/.claude/plugins/claude-hud/` 创建默认配置文件
-- 在 `~/.claude/settings.json` 写入状态行配置
-
-等效手动配置（`~/.claude/settings.json`）：
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "claude-hud render",
-    "refreshInterval": 5
-  }
-}
-```
-
-### 4. 验证
-
-重启 Claude Code 或执行 `/reload-plugins`，状态栏底部应出现 HUD 显示。
+检查 PATH、config.toml、statusLine 配置、图标集决议、git 可用性与样例渲染，输出 `[ok]`/`[!!]` 健康报告。
 
 ## CLI 命令参考
 
@@ -64,6 +59,8 @@ claude-hud setup
 | `claude-hud dashboard` | 全屏 TUI 仪表盘（`q`/`Esc` 退出） |
 | `claude-hud serve` | Web 仪表盘（`http://localhost:9527`） |
 | `claude-hud setup` | 一键配置 Claude Code |
+| `claude-hud doctor` | 自检：配置/状态行/图标/git/渲染健康报告 |
+| `claude-hud uninstall` | 移除 statusLine 与配置目录（卸载脚本内部调用） |
 
 ### Mod 管理
 
@@ -71,12 +68,10 @@ claude-hud setup
 |------|------|
 | `claude-hud mod list` | 列出所有已安装 Mod |
 | `claude-hud mod use <name>` | 切换 Mod（即时生效） |
-| `claude-hud mod use -` | 快速回切到上一个 Mod |
-| `claude-hud mod use @daily` | 按场景别名切换（@daily/@night/@agent/@ssh/@show/@mini） |
 | `claude-hud mod preview <name>` | 预览 Mod 效果 |
 | `claude-hud mod current` | 显示当前激活的 Mod |
 | `claude-hud mod save <name>` | 保存当前配置为新 Mod |
-| `claude-hud mod pick` | 交互选择器（方向键选 + 预览） |
+| `claude-hud mod pick` | 浏览所有 Mod（交互式选择器开发中） |
 | `claude-hud mod export <name>` | 导出 Mod 为 .toml |
 | `claude-hud mod import <file>` | 导入 .toml 到本地库 |
 | `claude-hud mod delete <name>` | 删除用户 Mod |
@@ -87,22 +82,17 @@ claude-hud setup
 | 命令 | 说明 |
 |------|------|
 | `claude-hud theme export` | 导出当前主题 |
-| `claude-hud theme import <file>` | 导入主题 |
+| `claude-hud theme import <file>` | 校验主题文件（不持久化，需手动写入 config.toml） |
 | `claude-hud widget list` | 列出可用 Widget |
 | `claude-hud widget test <name>` | 测试单个 Widget |
 
 ### Shell 补全
 
-```bash
-# Bash
-source <(claude-hud completion bash)
-# Zsh
-source <(claude-hud completion zsh)
-# Fish
-claude-hud completion fish > ~/.config/fish/completions/claude-hud.fish
-```
+`claude-hud completion` 为占位实现（仅输出示例文本），当前版本不提供可用补全，后续版本实现。
 
 ## 配置文件
+
+> `icon_set` 默认 `auto`，无 Nerd Font 时自动降级为 minimal 图标，无需手动配置。
 
 位置：`~/.claude/plugins/claude-hud/config.toml`
 
@@ -124,7 +114,7 @@ separator = " │ "
 
 [dashboard]
 refresh_interval_ms = 500
-default_layout = "grid-2x2"    # grid-2x2 | sidebar | tabbed | focus | hex-2x3 | freeform
+default_layout = "grid-2x2"    # grid-2x2 | sidebar | tabbed | focus
 
 # Widget 级配置
 [widgets.context_bar]
@@ -160,19 +150,19 @@ compact_lines = 1
 
 ```bash
 # 早上 — 日常开发
-claude-hud mod use @daily
+claude-hud mod use glacier-workstation
 
 # 晚上 — 切换暖色
-claude-hud mod use @night
+claude-hud mod use ember-night
 
 # 重度代理 — 侧栏监控
-claude-hud mod use @agent
+claude-hud mod use obsidian-command
 
 # SSH — 纯 ASCII
-claude-hud mod use @ssh
+claude-hud mod use matrix-surveillance
 
-# 试效果来回切
-claude-hud mod use -
+# 恢复出厂默认
+claude-hud mod reset
 ```
 
 ## 仪表盘快捷键
@@ -180,7 +170,7 @@ claude-hud mod use -
 | 键 | 功能 |
 |----|------|
 | `q` / `Esc` | 退出仪表盘 |
-| `1`-`9` | 切换标签页（Phase 4） |
+| `1`-`9` | 切换标签页（未实现，Phase 4 规划） |
 
 ## Web 仪表盘
 

@@ -2,42 +2,24 @@
   "name": "claude-hud",
   "version": "0.1.0",
   "description": "Dual-mode terminal HUD for Claude Code: compact status bar + full-screen TUI dashboard with agent observability, token attribution, and theme engine",
-  "author": "openlibing",
+  "author": "your-github-username",
   "license": "MIT",
-  "repository": "https://github.com/openlibing/claude-hud",
-  "homepage": "https://github.com/openlibing/claude-hud#readme",
-  "keywords": [
-    "statusline",
-    "dashboard",
-    "monitoring",
-    "tui",
-    "agent-observability",
-    "token-tracking",
-    "themes",
-    "rust"
-  ],
+  "repository": "https://github.com/your-username/claude-hud",
+  "keywords": ["statusline", "dashboard", "monitoring", "tui", "themes"],
   "categories": ["developer-tools", "monitoring"],
-  "minimum_claude_code_version": "1.0.80",
   "platforms": ["macos", "linux", "windows"],
-
-  "installation": {
-    "type": "binary",
-    "build_from_source": {
-      "command": "cargo install --path .",
-      "requirements": ["rust >= 1.75"]
-    }
-  },
-
-  "setup": {
-    "command": "claude-hud setup",
-    "description": "Auto-configure Claude Code status line and create default config"
-  },
-
-  "defaultSettings": {
-    "statusLine": {
-      "type": "command",
-      "command": "claude-hud render",
-      "refreshInterval": 5
+  "commands": {
+    "claude-hud:dashboard": {
+      "command": "claude-hud dashboard",
+      "description": "Open full-screen TUI dashboard"
+    },
+    "claude-hud:web": {
+      "command": "claude-hud serve",
+      "description": "Start web dashboard on localhost:9527"
+    },
+    "claude-hud:doctor": {
+      "command": "claude-hud doctor",
+      "description": "Run self-checks and print a health report"
     }
   }
 }

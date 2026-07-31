@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+
+jobs:
+  build:
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: macos-x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: macos-arm64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-x64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package (Unix)
+        if: matrix.os != 'windows-latest'
+        run: tar -czf claude-hud-${{ matrix.name }}.tar.gz -C target/${{ matrix.target }}/release claude-hud
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: Compress-Archive target/${{ matrix.target }}/release/claude-hud.exe claude-hud-${{ matrix.name }}.zip
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-hud-${{ matrix.name }}
+          path: claude-hud-${{ matrix.name }}.*
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Syntax + lint
+        run: |
+          bash -n scripts/install.sh scripts/uninstall.sh
+          shellcheck scripts/install.sh scripts/uninstall.sh
+
+  smoke-unix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install/uninstall smoke test
+        run: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          mkdir -p "$TMP/fakebin" "$TMP/.local/bin"
+          printf '#!/bin/sh\necho "fake-claude-hud"\n' > "$TMP/fakebin/claude-hud"
+          chmod +x "$TMP/fakebin/claude-hud"
+          HOME="$TMP" HUD_LOCAL_BIN="$TMP/fakebin/claude-hud" bash scripts/install.sh
+          grep -q "$TMP/.local/bin" "$TMP/.bashrc"
+          HOME="$TMP" HUD_INSTALL_DIR="$TMP/.local/bin" bash scripts/uninstall.sh
+          test ! -f "$TMP/.local/bin/claude-hud"
+          ! grep -q "$TMP/.local/bin" "$TMP/.bashrc"
+          echo "UNIX SMOKE OK"
+
+  smoke-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install/uninstall smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $orig = [Environment]::GetEnvironmentVariable('Path', 'User')
+          try {
+            $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP ('hudtest-' + [guid]::NewGuid())
+            $stub = Join-Path $env:RUNNER_TEMP 'hud-stub.cmd'
+            "@echo off`r`necho fake-claude-hud" | Set-Content -Encoding ascii $stub
+            $env:HUD_LOCAL_STUB = $stub
+            ./scripts/install.ps1
+            $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+            if ($UserPath -notlike "*$env:LOCALAPPDATA*") { throw "PATH not updated" }
+            ./scripts/uninstall.ps1
+            if (Test-Path (Join-Path $env:LOCALAPPDATA 'claude-hud')) { throw "install dir not removed" }
+            $UserPath2 = [Environment]::GetEnvironmentVariable('Path', 'User')
+            if ($UserPath2 -like "*$env:LOCALAPPDATA*") { throw "PATH not cleaned" }
+            Write-Host "WIN SMOKE OK"
+          } finally {
+            [Environment]::SetEnvironmentVariable('Path', $orig, 'User')
+            Remove-Item -Recurse -Force (Join-Path $env:RUNNER_TEMP 'hudtest-*') -ErrorAction SilentlyContinue
+            Remove-Item -Force (Join-Path $env:RUNNER_TEMP 'hud-stub.cmd') -ErrorAction SilentlyContinue
+          }
+
+  release:
+    needs: [build, shellcheck, smoke-unix, smoke-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: "Claude HUD ${{ github.ref_name }}"
+          body_path: CHANGELOG.md
+          files: |
+            artifacts/claude-hud-macos-x64.tar.gz
+            artifacts/claude-hud-macos-arm64.tar.gz
+            artifacts/claude-hud-linux-x64.tar.gz
+            artifacts/claude-hud-windows-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
