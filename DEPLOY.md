@@ -66,6 +66,7 @@ claude-hud doctor
 | `claude-hud doctor` | 自检：配置/状态行/图标/git/渲染健康报告（含 `update:` 信息项） |
 | `claude-hud uninstall` | 移除 statusLine 与配置目录（卸载脚本内部调用） |
 | `claude-hud history` | 跨会话历史：Weekly stats / Recent sessions / Daily cost（空库显示 `—`） |
+| `claude-hud history --weekly` | 周报五指标：会话数/成本合计/token 总量/最长时长/最高单会话（空库 `—`；成本带 `≈`） |
 | `claude-hud update check` | 检查新版本（占位符仓库输出 `not published yet`） |
 
 ### Mod 管理
@@ -119,6 +120,22 @@ Daily cost (last 7 days):
 ```
 
 记录时机：仪表盘 `q`/`Esc` 退出，以及紧凑模式 render 检测到 `transcript_path` 切换（上一会话结束）时自动写入。
+
+### 状态栏成本双轨（⑲）
+
+状态栏成本有两条计算路径：
+
+- **命中 `[pricing]`**：按 stdin 会话累计 token（input/output）× 单价重算，并带 `≈` 前缀（实时路径无 cache 数据，必然低估；混合模型会话重算不准确，建议固定模型或依赖透传）。模型 ID 以 stdin 的 `model.id` 为准（`claude-hud render --dump` 可查）。
+- **未命中 `[pricing]`**：透传 Claude Code 官方 `total_cost_usd`（含 cache，准确，无 `≈`）。Web 仪表盘与 dashboard 完整数据视图会显示"当前模型未配置单价"提示。
+
+零数据降级：网关无 usage/cost 时成本组显示 `—`（不显示 `$0.00` 假精确）。
+
+### 预算告警（⑳）
+
+- 预算基于 `≈` 估算值触发（与状态栏同一实时路径）；档位单调递进（每档一次）+ 10 分钟冷却（复用 `[alerts].cooldown_minutes`）跨进程去重。
+- 判定发生在 render 进程（每 5s 管线），**不开 dashboard 也能收到预警**。
+- dashboard 不接预算：其 transcript 精确成本与预算的 `≈` 实时语义冲突。
+- 与 `[alerts].cost_threshold_usd` 并存互不干扰，先到者先发。
 
 ### 状态栏宽度
 
@@ -180,6 +197,11 @@ warn_threshold_usd = "10.0"
 
 [widgets.agent_overview]
 stall_threshold_sec = "30"
+
+# 预算告警（render 进程判定，不开 dashboard 也能收到）
+[budget]
+cap_usd = 5.0              # 会话成本上限（0 = 关闭预算，默认关闭）
+warn_pcts = [50, 80, 100]  # 达到这些百分比时通知，每档一次（单调递进）
 
 # 临时覆盖（不修改 Mod 本身）
 [runtime_overrides]

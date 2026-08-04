@@ -55,6 +55,7 @@ claude-hud mod use <name>  # switch UI mod (e.g. glacier-workstation)
 claude-hud dashboard       # full-screen TUI dashboard (q/Esc to exit)
 claude-hud serve           # web dashboard at localhost:9527
 claude-hud history         # weekly stats / recent sessions / daily cost
+claude-hud history --weekly  # weekly five-metric report (cost/sessions/tokens/longest/top session)
 claude-hud update check    # check for a new release
 claude-hud completion bash # generate shell completions (bash/zsh/fish/powershell)
 ```

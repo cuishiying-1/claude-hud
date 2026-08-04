@@ -4,6 +4,15 @@
 
 - 安装使用流程简化：一键安装/卸载脚本、`setup` 自动合并、`uninstall`/`doctor` 子命令、`icon_set = "auto"` 零依赖字体决议
 
+## [0.4.0] - 2026-08-04 (v0.2 成本哨兵批次)
+
+### Added
+- ⑲ 实时成本双轨：realtime_cost（stdin 累计 token × in/out 单价，无 cache → ≈）注入 render 路径；effective_cost（transcript 含 cache）保留 dashboard
+- cost_display 合并单组 `≈$X.XX · Xk/Xk tok`（k 缩写 + 零数据 `—` 降级）
+- serve `/api/data` 增 `pricing_configured`/`model_id` + 前端未配置单价提示；dashboard cost_display 行尾标注
+- ⑳ `[budget]` 配置段（cap_usd + warn_pcts）+ check_budget 档位单调/跨进程冷却（复用 [alerts].cooldown_minutes）+ state.budget_tier + notify::budget + doctor budget_check
+- ㉑ `history --weekly` 五指标周报（MAX 口径独立查询）+ serve `trend` 字段 + 前端周趋势曲线
+
 ## [0.3.0] - 2026-08-03 (Phase 4 — batch C remainder)
 
 ### Added
