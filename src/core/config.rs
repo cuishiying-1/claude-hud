@@ -37,6 +37,9 @@ pub struct AppConfig {
     #[serde(default = "default_alerts")]
     pub alerts: AlertsConfig,
 
+    #[serde(default)]
+    pub budget: BudgetConfig,
+
     #[serde(default = "default_currency_symbol")]
     pub currency_symbol: String,
 
@@ -92,6 +95,28 @@ impl Default for AlertsConfig {
             cost_threshold_usd: 10.0,
             rate_limit_pct: 90.0,
             cooldown_minutes: 10,
+        }
+    }
+}
+
+/// [budget] 预算告警：cap_usd（0=关闭）+ warn_pcts 渐进档位（每档一次）。
+/// 冷却复用 [alerts].cooldown_minutes；预算基于 ≈ 实时估算成本触发。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BudgetConfig {
+    #[serde(default = "default_budget_cap")]
+    pub cap_usd: f64,
+    #[serde(default = "default_budget_warn_pcts")]
+    pub warn_pcts: Vec<f64>,
+}
+
+fn default_budget_cap() -> f64 { 0.0 }
+fn default_budget_warn_pcts() -> Vec<f64> { vec![50.0, 80.0, 100.0] }
+
+impl Default for BudgetConfig {
+    fn default() -> Self {
+        Self {
+            cap_usd: 0.0,
+            warn_pcts: vec![50.0, 80.0, 100.0],
         }
     }
 }
@@ -312,6 +337,7 @@ impl Default for AppConfig {
             widgets: HashMap::new(),
             runtime_overrides: None,
             alerts: AlertsConfig::default(),
+            budget: BudgetConfig::default(),
             currency_symbol: "$".into(),
             pricing: HashMap::new(),
         }

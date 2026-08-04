@@ -26,6 +26,9 @@ pub struct StateFile {
     /// mod use 的历史切换记录（`mod use -` 往返 toggle）。
     #[serde(default)]
     pub previous_mod: Option<String>,
+    /// ⑳ 已触发的最高预算档位（1-based，单调递进；0 = 未触发）。
+    #[serde(default)]
+    pub budget_tier: usize,
 }
 
 /// Last render failure, written before exit so doctor can surface it.
@@ -415,5 +418,12 @@ mod tests {
         let snap = SnapshotSegment::from_session(&data, 42);
         assert_eq!(snap.agent_count, 2);
         assert_eq!(snap.timestamp_secs, 42);
+    }
+
+    #[test]
+    fn budget_tier_defaults_zero_for_old_state() {
+        let old = r#"{"snapshot":{},"transcript":{},"cache":{},"alerts":{},"last_error":null}"#;
+        let st: StateFile = serde_json::from_str(old).unwrap();
+        assert_eq!(st.budget_tier, 0);
     }
 }

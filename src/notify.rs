@@ -56,3 +56,14 @@ pub fn agent_stalled(name: &str, seconds: u64) {
         &format!("Agent '{}' has had no tool call for {}s.", name, seconds),
     );
 }
+
+/// Convenience: budget tier reached (⑳; cost is the realtime estimate).
+pub fn budget(pct: f64, cap: f64, symbol: &str) {
+    send(
+        "Budget Warning",
+        &format!(
+            "Session cost reached {:.0}% of budget {}{:.2}.",
+            pct, symbol, cap
+        ),
+    );
+}

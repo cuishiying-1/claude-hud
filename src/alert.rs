@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::config::AlertsConfig;
+use crate::core::config::{AlertsConfig, BudgetConfig};
 use crate::core::session::SessionData;
 
 /// Notification kinds, keyed by the same strings in state.json's alerts
@@ -13,6 +13,7 @@ pub enum AlertKind {
     ContextCritical,
     CostThreshold,
     RateLimit,
+    Budget,
 }
 
 /// Cross-process cooldown state. render 是唯一权威：从 state.json 加载、
@@ -31,6 +32,16 @@ impl AlertCooldown {
     /// Persistable view of the cooldown map (state.json `alerts` segment).
     pub fn to_state(&self) -> HashMap<AlertKind, u64> {
         self.last_fired.clone()
+    }
+
+    /// Read the last-fired timestamp for a kind (0 = never fired).
+    pub fn fired_at(&self, kind: AlertKind) -> u64 {
+        self.last_fired.get(&kind).copied().unwrap_or(0)
+    }
+
+    /// Record a fire timestamp (跨进程冷却写入，随 state.alerts 持久化)。
+    pub fn mark_fired(&mut self, kind: AlertKind, now: u64) {
+        self.last_fired.insert(kind, now);
     }
 }
 
@@ -91,8 +102,44 @@ pub fn send_notifications(
             AlertKind::RateLimit => {
                 crate::notify::rate_limit_warning(data.rate_limits.five_hour.used_percentage)
             }
+            AlertKind::Budget => {}
         }
     }
+}
+
+/// ⑳ 预算档位检查（纯函数，无 OS 副作用）：
+/// cost ≥ cap×pct/100 的最高档位 > 已触发档位 → 触发；冷却窗口内不重复发
+/// （档位单调 + 冷却双保险：单调防回落重发，冷却防跨进程竞态）。
+/// 与 check_alerts 同用 AlertCooldown（Budget 键），触发时内部 mark_fired。
+pub fn check_budget(
+    cost: f64,
+    cfg: &BudgetConfig,
+    cooldown_minutes: u64,
+    last_tier: usize,
+    cooldown: &mut AlertCooldown,
+    now: u64,
+) -> Option<usize> {
+    if cfg.cap_usd <= 0.0 || cost <= 0.0 {
+        return None;
+    }
+    let tier = cfg
+        .warn_pcts
+        .iter()
+        .enumerate()
+        .filter(|(_, pct)| cost >= cfg.cap_usd * **pct / 100.0)
+        .map(|(i, _)| i + 1)
+        .max()
+        .unwrap_or(0);
+    if tier == 0 || tier <= last_tier {
+        return None;
+    }
+    let window = cooldown_minutes.saturating_mul(60);
+    let last = cooldown.fired_at(AlertKind::Budget);
+    if last != 0 && now.saturating_sub(last) < window {
+        return None;
+    }
+    cooldown.mark_fired(AlertKind::Budget, now);
+    Some(tier)
 }
 
 #[cfg(test)]
@@ -156,5 +203,57 @@ mod tests {
         map.insert(AlertKind::CostThreshold, 42);
         let cd = AlertCooldown::from_state(&map);
         assert_eq!(cd.to_state().get(&AlertKind::CostThreshold), Some(&42));
+    }
+
+    use crate::core::config::BudgetConfig;
+
+    fn budget_cfg() -> BudgetConfig {
+        BudgetConfig { cap_usd: 5.0, warn_pcts: vec![50.0, 80.0, 100.0] }
+    }
+
+    #[test]
+    fn budget_tier_progression_fires_each_tier_once() {
+        let mut cd = AlertCooldown::default();
+        // 40% → 无档位
+        assert!(check_budget(2.0, &budget_cfg(), 10, 0, &mut cd, 1000).is_none());
+        // 60% ≥ 50% → tier 1（首触发：fired_at=0 视为过期）
+        assert_eq!(check_budget(3.0, &budget_cfg(), 10, 0, &mut cd, 1001), Some(1));
+        // 同 tier（回落再升）→ 单调不发
+        assert!(check_budget(3.0, &budget_cfg(), 10, 1, &mut cd, 1002).is_none());
+        // 冷却窗口内档位更高也被挡（双保险：冷却优先）
+        assert!(check_budget(4.5, &budget_cfg(), 10, 1, &mut cd, 1003).is_none());
+        // 冷却过期（now - last ≥ 600）且档位更高 → tier 2
+        assert_eq!(check_budget(4.5, &budget_cfg(), 10, 1, &mut cd, 1700), Some(2));
+        // 再跨窗口 → tier 3
+        assert_eq!(check_budget(6.0, &budget_cfg(), 10, 2, &mut cd, 2400), Some(3));
+    }
+
+    #[test]
+    fn budget_cooldown_window_blocks_refire() {
+        let mut cd2 = AlertCooldown::default();
+        assert_eq!(check_budget(6.0, &budget_cfg(), 10, 0, &mut cd2, 1000), Some(3));
+        // 窗口 600s 内：last_tier 传低值模拟跨进程竞态 → 冷却挡（双保险第二层）
+        assert!(check_budget(6.0, &budget_cfg(), 10, 0, &mut cd2, 1500).is_none());
+        // 冷却过期（now - last >= 600）且档位更高 → 重发
+        assert_eq!(check_budget(7.0, &budget_cfg(), 10, 0, &mut cd2, 2000), Some(3));
+    }
+
+    #[test]
+    fn budget_disabled_when_cap_zero_or_cost_zero() {
+        let mut cd = AlertCooldown::default();
+        let off = BudgetConfig { cap_usd: 0.0, warn_pcts: vec![50.0] };
+        assert!(check_budget(100.0, &off, 10, 0, &mut cd, 1).is_none());
+        assert!(check_budget(0.0, &budget_cfg(), 10, 0, &mut cd, 1).is_none());
+    }
+
+    #[test]
+    fn budget_warn_pcts_out_of_order_converges_to_highest() {
+        let mut cd = AlertCooldown::default();
+        let messy = BudgetConfig { cap_usd: 10.0, warn_pcts: vec![100.0, 50.0, 80.0] };
+        // 6.0：仅 50%（index 1）满足 → tier 2（按枚举序映射档位号）
+        assert_eq!(check_budget(6.0, &messy, 10, 0, &mut cd, 1), Some(2));
+        // 11.0：三档全满足 → 收敛到最高档位 tier 3（不按乱序 index 0 判为 1）
+        let mut cd2 = AlertCooldown::default();
+        assert_eq!(check_budget(11.0, &messy, 10, 0, &mut cd2, 1), Some(3));
     }
 }

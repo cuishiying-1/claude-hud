@@ -84,6 +84,7 @@ pub fn run(
 
     contract_probe();
     pricing_check(config, &mut failures);
+    budget_check();
     update_check();
 
     if failures == 0 {
@@ -250,4 +251,35 @@ fn check(label: &str, ok: bool, ok_detail: &str, hint: &str) -> usize {
         println!("  [!!] {}: fix: {}", label, hint);
     }
     usize::from(!ok)
+}
+
+/// ⑳ 预算/告警冷却状态（信息项，恒 exit 0）：读 state.json 的
+/// alerts 冷却记录 + budget_tier（单调最高档位）。
+fn budget_check() {
+    let state_path = match AppConfig::state_path() {
+        Ok(p) => p,
+        Err(_) => {
+            println!("  [..] budget: state path unavailable");
+            return;
+        }
+    };
+    let state = StateFile::read(&state_path);
+    if state.budget_tier == 0 && state.alerts.is_empty() {
+        println!("  [..] budget: no alert records yet (render 后生效)");
+        return;
+    }
+    let now = crate::core::state::now_secs();
+    for (kind, ts) in &state.alerts {
+        println!(
+            "  [..] alerts: {:?} last fired {}s ago",
+            kind,
+            now.saturating_sub(*ts)
+        );
+    }
+    if state.budget_tier > 0 {
+        println!(
+            "  [..] budget: tier {} reached (monotonic)",
+            state.budget_tier
+        );
+    }
 }
