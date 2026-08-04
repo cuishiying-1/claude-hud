@@ -31,6 +31,15 @@ pub fn remove_status_line(existing: &str) -> Result<String, String> {
     pretty(&root)
 }
 
+/// True when the settings JSON contains a statusLine key (any shape).
+/// Unparseable JSON returns false.
+pub fn has_status_line(existing: &str) -> bool {
+    match serde_json::from_str::<Value>(existing) {
+        Ok(v) => v.get("statusLine").is_some(),
+        Err(_) => false,
+    }
+}
+
 fn parse_root(existing: &str) -> Result<Value, String> {
     if existing.trim().is_empty() {
         return Ok(Value::Object(Map::new()));
@@ -115,5 +124,25 @@ mod tests {
     fn remove_null_root_returns_empty_object() {
         let out = remove_status_line("null").unwrap();
         assert_eq!(out, "{}");
+    }
+
+    #[test]
+    fn has_status_line_present_any_shape() {
+        assert!(has_status_line(r#"{"statusLine":{}}"#));
+        assert!(has_status_line(
+            r#"{"statusLine":{"type":"command","command":"old-cmd"}}"#
+        ));
+    }
+
+    #[test]
+    fn has_status_line_absent() {
+        assert!(!has_status_line(r#"{"permissions":{}}"#));
+        assert!(!has_status_line(""));
+        assert!(!has_status_line("{}"));
+    }
+
+    #[test]
+    fn has_status_line_invalid_json_is_false() {
+        assert!(!has_status_line("{not json"));
     }
 }

@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use super::theme::Theme;
+use super::theme::{ResolvedTheme, Theme, ThemeRef};
+use super::theme::apply_theme_keys;
 use super::widget::WidgetConfig;
 
 /// Top-level configuration loaded from config.toml.
@@ -25,17 +26,30 @@ pub struct AppConfig {
     pub dashboard: DashboardConfig,
 
     #[serde(default)]
-    pub theme: Option<Theme>,
+    pub theme: Option<ThemeRef>,
 
     #[serde(default)]
     pub widgets: HashMap<String, toml::Value>,
 
     #[serde(default)]
     pub runtime_overrides: Option<RuntimeOverrides>,
+
+    #[serde(default = "default_alerts")]
+    pub alerts: AlertsConfig,
+
+    #[serde(default = "default_currency_symbol")]
+    pub currency_symbol: String,
+
+    #[serde(default)]
+    pub pricing: HashMap<String, crate::core::pricing::PriceEntry>,
 }
 
 fn default_active_mod() -> String {
     "glacier-workstation".into()
+}
+
+fn default_currency_symbol() -> String {
+    "$".into()
 }
 
 fn default_separator() -> String {
@@ -52,6 +66,35 @@ pub struct DashboardConfig {
 
 fn default_refresh() -> u64 { 500 }
 fn default_dash_layout() -> String { "grid-2x2".into() }
+
+/// [alerts] section: thresholds (0 = disabled) and cooldown window.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AlertsConfig {
+    #[serde(default = "default_ctx_critical")]
+    pub context_critical_pct: f64,
+    #[serde(default = "default_cost_threshold")]
+    pub cost_threshold_usd: f64,
+    #[serde(default = "default_rate_limit")]
+    pub rate_limit_pct: f64,
+    #[serde(default = "default_cooldown")]
+    pub cooldown_minutes: u64,
+}
+
+fn default_ctx_critical() -> f64 { 95.0 }
+fn default_cost_threshold() -> f64 { 10.0 }
+fn default_rate_limit() -> f64 { 90.0 }
+fn default_cooldown() -> u64 { 10 }
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            context_critical_pct: 95.0,
+            cost_threshold_usd: 10.0,
+            rate_limit_pct: 90.0,
+            cooldown_minutes: 10,
+        }
+    }
+}
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct RuntimeOverrides {
@@ -71,6 +114,9 @@ pub struct ModPackage {
     #[serde(default)]
     pub mod_info: ModInfo,
     pub layout: Option<ModLayout>,
+    /// 保存时的 compact widget 数组快照（布局 ID 之外的完整保留）。
+    #[serde(default)]
+    pub compact_widgets: Option<Vec<String>>,
     pub theme: Option<ModTheme>,
     #[serde(default)]
     pub animation: Option<ModAnimation>,
@@ -169,6 +215,12 @@ impl AppConfig {
         Ok(base.join(".claude").join("plugins").join("claude-hud").join("mods"))
     }
 
+    pub fn state_path() -> Result<PathBuf, String> {
+        let base = dirs::home_dir()
+            .ok_or_else(|| "cannot find home directory".to_string())?;
+        Ok(base.join(".claude").join("plugins").join("claude-hud").join("state.json"))
+    }
+
     /// Build WidgetConfig for a given widget id from the config.
     pub fn widget_config(&self, id: &str) -> WidgetConfig {
         let mut values = HashMap::new();
@@ -185,6 +237,59 @@ impl AppConfig {
             }
         }
         WidgetConfig { values }
+    }
+
+    /// 主题叠加链：基底(mod preset 或 config preset 或 default) →
+    /// config.theme 显式键 → config.theme.overrides → mod.theme.overrides。
+    pub fn resolve_theme(&self) -> ResolvedTheme {
+        let mut preset_name: Option<String> = None;
+        let mut base = Theme::default();
+        if !self.active_mod.is_empty() {
+            if let Ok(pkg) = Self::load_mod(&self.active_mod) {
+                if let Some(mt) = &pkg.theme {
+                    if let Some(t) = Theme::load_preset(&mt.preset) {
+                        base = t;
+                        preset_name = Some(mt.preset.clone());
+                    }
+                }
+            }
+        }
+        if let Some(tr) = &self.theme {
+            match tr {
+                ThemeRef::Preset(p) => {
+                    if preset_name.is_none() {
+                        if let Some(t) = Theme::load_preset(p) {
+                            base = t;
+                            preset_name = Some(p.clone());
+                        }
+                    }
+                }
+                ThemeRef::Table(tbl) => {
+                    if preset_name.is_none() {
+                        if let Some(p) = &tbl.preset {
+                            if let Some(t) = Theme::load_preset(p) {
+                                base = t;
+                                preset_name = Some(p.clone());
+                            }
+                        }
+                    }
+                    apply_theme_keys(&mut base, &tbl.colors);
+                    if let Some(ov) = &tbl.overrides {
+                        apply_theme_keys(&mut base, ov);
+                    }
+                }
+            }
+        }
+        if !self.active_mod.is_empty() {
+            if let Ok(pkg) = Self::load_mod(&self.active_mod) {
+                if let Some(mt) = &pkg.theme {
+                    if let Some(ov) = &mt.overrides {
+                        apply_theme_keys(&mut base, ov);
+                    }
+                }
+            }
+        }
+        ResolvedTheme { preset: preset_name, theme: base }
     }
 }
 
@@ -206,6 +311,100 @@ impl Default for AppConfig {
             theme: None,
             widgets: HashMap::new(),
             runtime_overrides: None,
+            alerts: AlertsConfig::default(),
+            currency_symbol: "$".into(),
+            pricing: HashMap::new(),
         }
+    }
+}
+
+fn default_alerts() -> AlertsConfig {
+    AlertsConfig::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alerts_defaults() {
+        let a = AlertsConfig::default();
+        assert_eq!(a.context_critical_pct, 95.0);
+        assert_eq!(a.cost_threshold_usd, 10.0);
+        assert_eq!(a.rate_limit_pct, 90.0);
+        assert_eq!(a.cooldown_minutes, 10);
+    }
+
+    #[test]
+    fn currency_symbol_and_pricing_defaults() {
+        let c = AppConfig::default();
+        assert_eq!(c.currency_symbol, "$");
+        assert!(c.pricing.is_empty());
+    }
+
+    #[test]
+    fn pricing_table_parses_with_field_defaults() {
+        let toml_str = r#"
+            currency_symbol = "¥"
+            [pricing]
+            "m1" = { input = 1e-6, output = 2e-6 }
+        "#;
+        let cfg: AppConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.currency_symbol, "¥");
+        let p = cfg.pricing.get("m1").expect("model price parsed");
+        assert_eq!(p.input, 1e-6);
+        assert_eq!(p.output, 2e-6);
+        assert_eq!(p.cache_read, 0.0); // 缺省按 0
+        assert_eq!(p.cache_creation, 0.0);
+    }
+
+    #[test]
+    fn merge_theme_layers_order() {
+        // 基底 dracula → config 键层 accent → config overrides accent →
+        // mod overrides accent：后者胜出
+        let base = Theme::load_preset("dracula").unwrap();
+        let config_keys: HashMap<String, toml::Value> =
+            toml::from_str("accent = \"#111111\"\n").unwrap();
+        let config_ov: HashMap<String, toml::Value> =
+            toml::from_str("accent = \"#222222\"\n").unwrap();
+        let mod_ov: HashMap<String, toml::Value> =
+            toml::from_str("accent = \"#333333\"\n").unwrap();
+        let mut merged = base;
+        apply_theme_keys(&mut merged, &config_keys);
+        apply_theme_keys(&mut merged, &config_ov);
+        apply_theme_keys(&mut merged, &mod_ov);
+        assert_eq!(merged.accent, "#333333");
+        assert_eq!(merged.bg, "#282a36"); // dracula 底色保留
+    }
+
+    #[test]
+    fn resolve_theme_string_preset_without_mod() {
+        let cfg: AppConfig = toml::from_str(
+            "active_mod = \"\"\ntheme = \"dracula\"\n",
+        ).unwrap();
+        let r = cfg.resolve_theme();
+        assert_eq!(r.preset.as_deref(), Some("dracula"));
+        assert_eq!(r.theme.bg, "#282a36");
+    }
+
+    #[test]
+    fn resolve_theme_partial_table_overrides_default() {
+        let cfg: AppConfig = toml::from_str(
+            "active_mod = \"\"\n[theme]\naccent = \"#ff0000\"\n",
+        ).unwrap();
+        let r = cfg.resolve_theme();
+        assert_eq!(r.theme.accent, "#ff0000");
+        assert_eq!(r.theme.bg, "#2e3440"); // 其余为 default nord
+    }
+
+    #[test]
+    fn resolve_theme_preset_and_overrides_table() {
+        let cfg: AppConfig = toml::from_str(
+            "active_mod = \"\"\n[theme]\npreset = \"dracula\"\n[theme.overrides]\naccent = \"#ff0000\"\n",
+        ).unwrap();
+        let r = cfg.resolve_theme();
+        assert_eq!(r.preset.as_deref(), Some("dracula"));
+        assert_eq!(r.theme.bg, "#282a36");
+        assert_eq!(r.theme.accent, "#ff0000");
     }
 }

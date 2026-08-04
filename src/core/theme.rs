@@ -1,19 +1,54 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// 主题引用：字符串预设名或 [theme] 表（部分/完整/preset+overrides 统一走
+/// Table 形态）。untagged 按声明顺序尝试，字符串与表天然互斥，无歧义。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ThemeRef {
+    /// theme = "dracula"
+    Preset(String),
+    /// [theme] ...（部分表/完整表/preset+overrides 均为此形态）
+    Table(ThemeTable),
+}
+
+/// [theme] 表：preset 引用 + overrides 微调 + flatten 捕获的显式主题键。
+/// flatten 是叠加合并正确性的关键——「哪些键被显式写出」可检测。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ThemeTable {
+    #[serde(default)]
+    pub preset: Option<String>,
+    #[serde(default)]
+    pub overrides: Option<HashMap<String, toml::Value>>,
+    #[serde(flatten)]
+    pub colors: HashMap<String, toml::Value>,
+}
 
 /// Complete theme definition (20 tokens).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Theme {
     // Color tokens (11)
+    #[serde(default = "default_bg")]
     pub bg: String,
+    #[serde(default = "default_fg")]
     pub fg: String,
+    #[serde(default = "default_accent")]
     pub accent: String,
+    #[serde(default = "default_success")]
     pub success: String,
+    #[serde(default = "default_warning")]
     pub warning: String,
+    #[serde(default = "default_danger")]
     pub danger: String,
+    #[serde(default = "default_muted")]
     pub muted: String,
+    #[serde(default = "default_border")]
     pub border: String,
+    #[serde(default = "default_skill_color")]
     pub skill_color: String,
+    #[serde(default = "default_mcp_color")]
     pub mcp_color: String,
+    #[serde(default = "default_model_color")]
     pub model_color: String,
 
     // Style tokens (9)
@@ -37,6 +72,18 @@ pub struct Theme {
     pub dashboard_grid: u8,
 }
 
+fn default_bg() -> String { "#2e3440".into() }
+fn default_fg() -> String { "#d8dee9".into() }
+fn default_accent() -> String { "#88c0d0".into() }
+fn default_success() -> String { "#a3be8c".into() }
+fn default_warning() -> String { "#ebcb8b".into() }
+fn default_danger() -> String { "#bf616a".into() }
+fn default_muted() -> String { "#5e81ac".into() }
+fn default_border() -> String { "#434c5e".into() }
+fn default_skill_color() -> String { "#b48ead".into() }
+fn default_mcp_color() -> String { "#d08770".into() }
+fn default_model_color() -> String { "#88c0d0".into() }
+
 fn default_bar_filled() -> char { '█' }
 fn default_bar_empty() -> char { '░' }
 fn default_separator() -> String { " │ ".into() }
@@ -47,7 +94,7 @@ fn default_padding() -> u16 { 1 }
 fn default_compact_lines() -> u8 { 2 }
 fn default_dashboard_grid() -> u8 { 2 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BorderStyle {
     Single,
@@ -57,7 +104,7 @@ pub enum BorderStyle {
     Hidden,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IconSet {
     Auto,
@@ -234,6 +281,90 @@ mod tests {
         theme.icon_set = IconSet::Nerd;
         assert!(matches!(theme.resolve_icon_set_with(false), IconSet::Nerd));
     }
+
+    #[test]
+    fn theme_ref_string_preset_parses() {
+        // untagged 反序列化：TOML 字符串值 → Preset 变体
+        let doc: toml::Value = toml::from_str("theme = \"dracula\"").unwrap();
+        let tr: ThemeRef = doc["theme"].clone().try_into().unwrap();
+        assert!(matches!(tr, ThemeRef::Preset(s) if s == "dracula"));
+    }
+
+    #[test]
+    fn theme_ref_table_parses_partial() {
+        let tbl: ThemeTable = toml::from_str("accent = \"#ff0000\"\n").unwrap();
+        assert_eq!(tbl.preset, None);
+        assert_eq!(tbl.overrides, None);
+        assert!(tbl.colors.contains_key("accent"));
+    }
+
+    #[test]
+    fn theme_ref_table_parses_preset_and_overrides() {
+        let tbl: ThemeTable = toml::from_str(
+            "preset = \"dracula\"\n[overrides]\naccent = \"#123456\"\n",
+        ).unwrap();
+        assert_eq!(tbl.preset.as_deref(), Some("dracula"));
+        assert!(tbl.overrides.is_some());
+        // flatten 契约：具名字段不被 colors 吞掉
+        assert!(!tbl.colors.contains_key("preset"));
+        assert!(!tbl.colors.contains_key("overrides"));
+    }
+
+    #[test]
+    fn theme_ref_empty_table_parses() {
+        let tbl: ThemeTable = toml::from_str("").unwrap();
+        assert_eq!(tbl.preset, None);
+        assert!(tbl.colors.is_empty());
+    }
+
+    #[test]
+    fn theme_partial_table_uses_serde_defaults() {
+        // 部分表（仅 1 个颜色键）→ 其余 19 键走 per-field default
+        let theme: Theme = toml::from_str("accent = \"#ff0000\"\n").unwrap();
+        assert_eq!(theme.accent, "#ff0000");
+        assert_eq!(theme.bg, "#2e3440");
+        assert_eq!(theme.bar_filled, '█');
+    }
+
+    #[test]
+    fn apply_theme_keys_color_numeric_and_enum() {
+        let mut base = Theme::default();
+        let keys: HashMap<String, toml::Value> = toml::from_str(
+            "accent = \"#123456\"\nbar_width = 20\nicon_set = \"nerd\"\n",
+        ).unwrap();
+        apply_theme_keys(&mut base, &keys);
+        assert_eq!(base.accent, "#123456");
+        assert_eq!(base.bar_width, 20);
+        assert!(matches!(base.icon_set, IconSet::Nerd));
+        assert_eq!(base.bg, "#2e3440"); // 未提供的键不变
+    }
+
+    #[test]
+    fn apply_theme_keys_unknown_ignored() {
+        let mut base = Theme::default();
+        let keys: HashMap<String, toml::Value> =
+            toml::from_str("future_key = \"x\"\n").unwrap();
+        apply_theme_keys(&mut base, &keys);
+        assert_eq!(base.accent, "#88c0d0");
+    }
+
+    #[test]
+    fn apply_theme_keys_enum_bad_value_keeps_base() {
+        let mut base = Theme::default();
+        let keys: HashMap<String, toml::Value> =
+            toml::from_str("icon_set = \"bogus\"\n").unwrap();
+        apply_theme_keys(&mut base, &keys);
+        assert!(matches!(base.icon_set, IconSet::Auto));
+    }
+
+    #[test]
+    fn apply_theme_keys_char_tokens() {
+        let mut base = Theme::default();
+        let keys: HashMap<String, toml::Value> =
+            toml::from_str("bar_filled = \"■\"\n").unwrap();
+        apply_theme_keys(&mut base, &keys);
+        assert_eq!(base.bar_filled, '■');
+    }
 }
 
 impl Default for Theme {
@@ -259,6 +390,88 @@ impl Default for Theme {
             padding: default_padding(),
             compact_lines: default_compact_lines(),
             dashboard_grid: default_dashboard_grid(),
+        }
+    }
+}
+
+/// 合并结果：基底 preset 名 + 完整主题。mod save 快照需要知道基底名。
+#[derive(Debug, Clone)]
+pub struct ResolvedTheme {
+    pub preset: Option<String>,
+    pub theme: Theme,
+}
+
+/// 将键表中与 Theme 20 字段同名的键类型化覆盖到 base；未知键忽略。
+/// colors 与 overrides 共用（唯一的差别是调用层级）。
+pub fn apply_theme_keys(base: &mut Theme, keys: &HashMap<String, toml::Value>) {
+    for (k, v) in keys {
+        match k.as_str() {
+            "bg" => base.bg = v.as_str().unwrap_or(&base.bg).to_string(),
+            "fg" => base.fg = v.as_str().unwrap_or(&base.fg).to_string(),
+            "accent" => base.accent = v.as_str().unwrap_or(&base.accent).to_string(),
+            "success" => base.success = v.as_str().unwrap_or(&base.success).to_string(),
+            "warning" => base.warning = v.as_str().unwrap_or(&base.warning).to_string(),
+            "danger" => base.danger = v.as_str().unwrap_or(&base.danger).to_string(),
+            "muted" => base.muted = v.as_str().unwrap_or(&base.muted).to_string(),
+            "border" => base.border = v.as_str().unwrap_or(&base.border).to_string(),
+            "skill_color" => base.skill_color = v.as_str().unwrap_or(&base.skill_color).to_string(),
+            "mcp_color" => base.mcp_color = v.as_str().unwrap_or(&base.mcp_color).to_string(),
+            "model_color" => base.model_color = v.as_str().unwrap_or(&base.model_color).to_string(),
+            "separator" => base.separator = v.as_str().unwrap_or(&base.separator).to_string(),
+            "bar_filled" => {
+                if let Some(c) = v.as_str().and_then(|s| s.chars().next()) {
+                    base.bar_filled = c;
+                }
+            }
+            "bar_empty" => {
+                if let Some(c) = v.as_str().and_then(|s| s.chars().next()) {
+                    base.bar_empty = c;
+                }
+            }
+            "bar_width" => {
+                if let Some(i) = v.as_integer() {
+                    base.bar_width = i as u16;
+                }
+            }
+            "padding" => {
+                if let Some(i) = v.as_integer() {
+                    base.padding = i as u16;
+                }
+            }
+            "compact_lines" => {
+                if let Some(i) = v.as_integer() {
+                    base.compact_lines = i as u8;
+                }
+            }
+            "dashboard_grid" => {
+                if let Some(i) = v.as_integer() {
+                    base.dashboard_grid = i as u8;
+                }
+            }
+            "icon_set" => {
+                if let Some(s) = v.as_str() {
+                    base.icon_set = match s {
+                        "auto" => IconSet::Auto,
+                        "nerd" => IconSet::Nerd,
+                        "ascii" => IconSet::Ascii,
+                        "minimal" => IconSet::Minimal,
+                        _ => base.icon_set,
+                    };
+                }
+            }
+            "border_style" => {
+                if let Some(s) = v.as_str() {
+                    base.border_style = match s {
+                        "single" => BorderStyle::Single,
+                        "double" => BorderStyle::Double,
+                        "rounded" => BorderStyle::Rounded,
+                        "thick" => BorderStyle::Thick,
+                        "hidden" => BorderStyle::Hidden,
+                        _ => base.border_style.clone(),
+                    };
+                }
+            }
+            _ => {}
         }
     }
 }

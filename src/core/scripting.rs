@@ -73,15 +73,20 @@ impl Default for ScriptEngine {
     }
 }
 
-/// Execute a shell command and return its stdout.
+/// Execute a shell command. On Windows use `cmd /C`, elsewhere `sh -c`.
 pub fn run_shell_command(command: &str) -> Result<String, String> {
     use std::process::Command;
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    #[cfg(windows)]
+    let mut cmd = Command::new("cmd");
+    #[cfg(not(windows))]
+    let mut cmd = Command::new("sh");
+    #[cfg(windows)]
+    cmd.arg("/C").arg(command);
+    #[cfg(not(windows))]
+    cmd.arg("-c").arg(command);
+    let output = cmd
         .output()
         .map_err(|e| format!("shell command failed: {}", e))?;
-
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
