@@ -65,9 +65,9 @@ claude-hud/
 │   │   ├── cc_config.rs       # settings.json 合并/移除 statusLine（原子写 + 备份）
 │   │   ├── history.rs         # SQLite 跨会话历史
 │   │   ├── scripting.rs       # Rhai 引擎 + Shell 命令 + HTTP 轮询
-│   │   ├── animation.rs       # 动画状态（帧计数 + 呼吸原语）
+│   │   ├── animation.rs       # 时间相位纯函数（now_phase/breathe/gradient/ease_out/scanline_offset）
 │   │   └── ansi.rs            # ANSI True Color / 截断等工具
-│   ├── widgets/               # 13 个内置 Widget + 脚本 Widget
+│   ├── widgets/               # 14 个内置 Widget + 脚本 Widget
 │   └── probe/
 │       ├── git.rs             # Git 状态探测（分支/脏/领先落后）
 │       └── filesystem.rs      # Skills/MCP 数量扫描
@@ -176,7 +176,7 @@ pub trait Widget {
 
 `WidgetConfig` 是 `HashMap<String,String>` 的薄封装，提供 `get_str/get_bool/get_f64/get_u64`，从 `config.toml` 的 `[widgets.<id>]` 表反序列化而来（值统一转字符串）。
 
-`WidgetRegistry` 持有全部 Widget 实例；主流程（main.rs）依次注册 13 个内置 Widget + 按配置实例化脚本 Widget。
+`WidgetRegistry` 持有全部 Widget 实例；主流程（main.rs）依次注册 14 个内置 Widget + 按配置实例化脚本 Widget。
 
 ### 5.2 内置 Widget 清单
 
@@ -202,6 +202,7 @@ pub trait Widget {
 | `session_stats` | `⏱ 12m · 342 tok/s · 5 calls` | 耗时/行数/工具 + Top-5 工具 | ✅ |
 | `skills_mcp_dynamic` | 活跃 Skill/MCP 名 | 调用次数统计 | ✅ |
 | `alerts` | 阈值告警链（呼吸闪烁） | 告警面板 | ✅ |
+| `token_rate` | `tok 3.1k/min` 速率文本（空数据 `—`） | 最近 24 桶盲文频谱竖条 | ✅ |
 
 **Phase 3（脚本 Widget，见 §13）**：`script_rhai` / `script_shell` / `script_http`。
 
@@ -306,14 +307,18 @@ stdin JSON → SessionData → (Transcript 增量解析 → 广播 update_transc
 
 ## 9. 动画系统（`src/core/animation.rs`）
 
-### 9.1 现状（v0.3 收缩）
+### 9.1 现状（v0.4 时间相位重建）
 
-`AnimationState` 保留 `frame` 计数 + `tick()` + `neon_breathing`（唯一接线原语）。其余 9 个未接线原语（spectrum_cycle/eased_value/barber_offset/spark_frame/glitch_offset/marquee_offset/wave_offset/liquid_height/scanline_alpha）与 `hsl_to_rgb`、`Spark` 已于 v0.3 按拍板删除（2026-08-04）：frame 制动画与 5s 进程重生架构不兼容（任务②⑧已定时间相位驱动），蓝图保留给 v0.4 动画批次。
+动画系统重建为**墙钟时间相位纯函数**（2026-08-04）：`now_phase(period)` 返回周期内位置 [0,1)，`CLAUDE_HUD_PHASE` env（合法 f64 ∈ [0,1)）覆盖以获得黑盒确定性（COLUMNS 先例）；`breathe(hex, phase)` 正弦亮度脉动（phase 0.25 全亮 / 0.75 最暗 0.45×）；`gradient(hex_a, hex_b, t)` 线性 RGB 插值；`ease_out(t)`；`scanline_offset(phase, height)`。frame 制 `AnimationState` 已删除（与 5s 进程重生架构不兼容：紧凑进程每进程仅 1 帧）。
 
-### 9.2 实际接入情况
+### 9.2 实际接入情况（6 效果接线）
 
-- ✅ `agent_detail`：卡顿代理标记使用 `neon_breathing` 呼吸红（可靠时间轴下触发，见 4.4）
-- ⬜ v0.4 动画批次（时间相位纯函数重建 + 6 效果分档）：渐变进度条 / 呼吸 / 缓动计数器 / CRT 扫描线 / 伪 3D 面板 / 盲文频谱；其余 9 种装饰效果拍板砍除（跑马灯被 ⑮ 截断取代）
+- ✅ 渐变进度条：context_bar 紧凑进度条逐 cell truecolor 渐变（success→danger，接线既有 `gradient` 配置键，默认开；关 → 3 档变色）
+- ✅ 呼吸：alerts critical 分支与 agent_detail 卡顿标记使用 `breathe(danger, now_phase(4.0))`（4s 周期正弦脉动）
+- ✅ 缓动计数器：仪表盘 cost_display 0.8s ease-out 滚动（唯一进程内动画状态，常驻进程适用；紧凑进程不适用拍板确认）
+- ✅ CRT 扫描线：dashboard 背景每 4 行 border 色 dim 行 + 相位行进 accent 扫描带（`[dashboard] scanlines`，默认开）
+- ✅ 伪 3D 面板：focus/tabbed 布局 accent 边框（光源）+ 右下偏移 1 格 border 色阴影块（ratatui 0.29 无按侧边框样式，用偏移阴影实现 bevel）
+- ✅ 盲文频谱：新 widget `token_rate` 仪表盘最近 24 桶竖条（8 级块字符）+ 紧凑 `tok 3.1k/min` 速率文本（尾桶增量口径；空数据 `—`）
 
 ---
 
@@ -628,15 +633,15 @@ irm https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/install.ps1
 
 ### ✅ 完整实现
 
-CLI 23 子命令 · 13 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 预设 + 字体探测 · 图标 auto 决议 · 6 出厂 Mod · Transcript 增量解析与统计 · 紧凑渲染管线 · 仪表盘 3 布局 · Web 面板 · SQLite 历史数据层 · 5 类 OS 通知 · setup/uninstall/doctor · 一键安装脚本 ×2 平台 · CI 发布矩阵 · 单元测试 + 黑盒测试套件 · 数据通路（state.json 5 段全量原子写 + Transcript 跨进程游标累计 + 告警跨进程冷却 + 越阈告警配置化 + doctor 自检 last_error 上报）· 输入契约（subagentStatusLine/扁平 rate_limits 双形态 + render --dump 键分类 + doctor 契约探针）· 真实时间轴（ISO8601 主时间轴 + timestamps_reliable 降级 + epoch 60s 分桶 + 真实卡顿/压缩预测）· 成本正确性（currency_symbol 全局 + [pricing] 三态重算 + context_bar tokens + doctor 负单价校验）· 配置契约（ThemeRef 双形态 + 四层叠加 + 失败警告 + import 落盘）· Mod 真相（use 校验 + previous_mod + @scene + save 快照 + 渲染灌入 + pick）· ANSI 整段上色（4 widget + 黑盒 ANSI 结构断言）· 历史库消费（history 三块输出 + render 会话切换自动结账 + serve weekly 字段 + Web This Week 卡片 + 黑盒用例 130 例）· Shell Widget 跨平台（Windows cmd /C、Unix sh -c + 死代码清理）· 补全真实现（clap_complete：bash/zsh/fish/powershell）· 零宽度感知（COLUMNS 宽度源 + fit_line 组级截断 + 字段 24 字符截断）· dashboard 交互（l 布局循环 + default_layout 持久化 + ? 帮助面板 + 底部 footer）· 通知全接线（5/5 + 进程内去重）· 安装健壮性（占位符检测 + 三态输出 + setup 时间戳备份）· 全局生效提示（写配置命令 8 处 `(applies to all windows)`）· 升级通路（update check 占位符短路 + doctor update:）· v0.2 成本哨兵（realtime_cost 双轨 + cost_display 合并单组 `≈$X · Xk/Xk tok` + 零数据 `—` 降级 + `[budget]` 档位单调/跨进程冷却 + doctor 档位读取 + `history --weekly` 五指标 + serve 周趋势曲线 + 黑盒用例 138 例）· v0.3 性能与卫生（token_timeline 360 桶上限 + 结账 path→ts 表去重（振荡防 double-billing）+ serve 历史 30s TTL 缓存 + 状态栏预算占比 `· NN%` + 17 个构建 warning 清零（动画原语收缩/死代码清理）+ 黑盒用例 141 例）
+CLI 23 子命令 · 14 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 预设 + 字体探测 · 图标 auto 决议 · 6 出厂 Mod · Transcript 增量解析与统计 · 紧凑渲染管线 · 仪表盘 4 布局 · Web 面板 · SQLite 历史数据层 · 5 类 OS 通知 · setup/uninstall/doctor · 一键安装脚本 ×2 平台 · CI 发布矩阵 · 单元测试 + 黑盒测试套件 · 数据通路（state.json 5 段全量原子写 + Transcript 跨进程游标累计 + 告警跨进程冷却 + 越阈告警配置化 + doctor 自检 last_error 上报）· 输入契约（subagentStatusLine/扁平 rate_limits 双形态 + render --dump 键分类 + doctor 契约探针）· 真实时间轴（ISO8601 主时间轴 + timestamps_reliable 降级 + epoch 60s 分桶 + 真实卡顿/压缩预测）· 成本正确性（currency_symbol 全局 + [pricing] 三态重算 + context_bar tokens + doctor 负单价校验）· 配置契约（ThemeRef 双形态 + 四层叠加 + 失败警告 + import 落盘）· Mod 真相（use 校验 + previous_mod + @scene + save 快照 + 渲染灌入 + pick）· ANSI 整段上色（4 widget + 黑盒 ANSI 结构断言）· 历史库消费（history 三块输出 + render 会话切换自动结账 + serve weekly 字段 + Web This Week 卡片 + 黑盒用例 130 例）· Shell Widget 跨平台（Windows cmd /C、Unix sh -c + 死代码清理）· 补全真实现（clap_complete：bash/zsh/fish/powershell）· 零宽度感知（COLUMNS 宽度源 + fit_line 组级截断 + 字段 24 字符截断）· dashboard 交互（l 布局循环 + default_layout 持久化 + ? 帮助面板 + 底部 footer + ←/→ tab 切换）· 通知全接线（5/5 + 进程内去重）· 安装健壮性（占位符检测 + 三态输出 + setup 时间戳备份）· 全局生效提示（写配置命令 8 处 `(applies to all windows)`）· 升级通路（update check 占位符短路 + doctor update:）· v0.2 成本哨兵（realtime_cost 双轨 + cost_display 合并单组 `≈$X · Xk/Xk tok` + 零数据 `—` 降级 + `[budget]` 档位单调/跨进程冷却 + doctor 档位读取 + `history --weekly` 五指标 + serve 周趋势曲线 + 黑盒用例 138 例）· v0.3 性能与卫生（token_timeline 360 桶上限 + 结账 path→ts 表去重（振荡防 double-billing）+ serve 历史 30s TTL 缓存 + 状态栏预算占比 `· NN%` + 17 个构建 warning 清零（动画原语收缩/死代码清理）+ 黑盒用例 141 例）· v0.4 视觉批次（时间相位动画重建 + 6 效果接线 + tabbed 布局补全 + 黑盒用例 147 例）
 
 ### 🟡 部分实现 / 占位
 
 | 项 | 现状 |
 |----|------|
-| 仪表盘布局 | tabbed/focus 退化为单面板；hex-2x3/freeform 未实现 |
+| 仪表盘布局 | hex-2x3/freeform 未实现 |
 | Mod 布局 ID | agent-centric/kpi/contextual/full 未实现（报 "not implemented"），仅 minimal/activity 映射 |
-| 动画 | 保留帧计数 + neon_breathing（唯一接线）；9 个未接线原语 v0.3 按拍板删除，v0.4 时间相位重建（6 效果分档）；渐变进度条仍为 3 档变色 |
+| 动画 | 6 效果已接线（渐变进度条/呼吸/缓动计数器/CRT 扫描线/伪 3D 面板/盲文频谱）；其余装饰效果按拍板砍除 |
 | 历史展示（TUI） | TUI 仪表盘趋势面板未实现（Web 面板已有 This Week 卡片） |
 
 ### ⬜ 设计蓝图未实现（见 DESIGN.md）
@@ -659,8 +664,9 @@ CLI 23 子命令 · 13 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 �
 | Phase 4 性能与卫生 | token_timeline 上限 + 结账去重 + serve 缓存 + 预算占比 + warning 清零 | ✅ |
 | Phase 4 batch C 剩余（⑨⑩⑪⑮⑯⑰⑱，2026-08-04） | 历史库消费 + Shell Widget 跨平台 + 补全真实现 + 零宽度感知 + dashboard 交互 + 通知全接线 + 安装健壮性 + 升级通路 + 黑盒用例 130 例 + 单元测试 99 个 | ✅ |
 | v0.2 成本哨兵（⑲⑳㉑，2026-08-04） | 实时成本状态栏（双轨 + 合并单组）+ 预算告警（档位单调/跨进程冷却）+ 成本周报（--weekly + serve 周曲线）+ 黑盒用例 138 例 + 单元测试 112 个 | ✅（㉑ 使用价值待用户反馈验证） |
+| v0.4 视觉批次（动画 6 效果 + tabbed，2026-08-04） | 时间相位动画重建（CLAUDE_HUD_PHASE 确定性）+ 渐变进度条/呼吸/缓动计数器/CRT 扫描线/伪 3D 面板/盲文频谱 + tabbed 布局补全 + 黑盒用例 147 例 + 单元测试 136 个 | ✅ |
 | Phase 5 持续迭代 | 国际化、更多主题、性能优化 | ⬜ |
 
 ---
 
-*本文档基于源码（src/ 共约 4100 行）与现有文档（DESIGN/PLUGIN/DEPLOY/README/CHANGELOG）整理，生成于 2026-07-31，更新于 2026-08-04（Phase 4 batch C 剩余 ⑨⑩⑪⑮⑯⑰⑱ 交付回写）。*
+*本文档基于源码（src/ 共约 4100 行）与现有文档（DESIGN/PLUGIN/DEPLOY/README/CHANGELOG）整理，生成于 2026-07-31，更新于 2026-08-04（Phase 4 batch C 剩余 ⑨⑩⑪⑮⑯⑰⑱ + v0.2 成本哨兵 + v0.3 性能与卫生 + v0.4 视觉批次交付回写）。*

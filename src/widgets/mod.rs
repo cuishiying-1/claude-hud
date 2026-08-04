@@ -12,6 +12,7 @@ pub mod session_stats;
 pub mod skills_mcp;
 pub mod skills_mcp_dynamic;
 pub mod token_attribution;
+pub mod token_rate;
 
 use crate::core::widget::WidgetRegistry;
 
@@ -20,7 +21,7 @@ pub fn register_all(registry: &mut WidgetRegistry, _config: &crate::core::config
     // Phase 1
     registry.register(Box::new(context_bar::ContextBar));
     registry.register(Box::new(model_display::ModelDisplay));
-    registry.register(Box::new(cost_display::CostDisplay));
+    registry.register(Box::new(cost_display::CostDisplay::new()));
     registry.register(Box::new(agent_overview::AgentOverview));
     registry.register(Box::new(skills_mcp::SkillsMcp));
     registry.register(Box::new(rate_limits::RateLimits));
@@ -35,6 +36,7 @@ pub fn register_all(registry: &mut WidgetRegistry, _config: &crate::core::config
     registry.register(Box::new(session_stats::SessionStats::new()));
     registry.register(Box::new(skills_mcp_dynamic::SkillsMcpDynamic::new()));
     registry.register(Box::new(alerts::Alerts::new()));
+    registry.register(Box::new(token_rate::TokenRate::new()));
 
     // Phase 3: user-registered script widgets are added at runtime
     // via config. Script widget instances are created per-config.

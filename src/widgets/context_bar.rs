@@ -22,11 +22,31 @@ impl Widget for ContextBar {
         let empty = bar_width - filled;
         let warn = config.get_f64("warn_threshold", 80.0);
         let critical = config.get_f64("critical_threshold", 95.0);
-        let color = if pct >= critical { &theme.danger } else if pct >= warn { &theme.warning } else { &theme.success };
-        let filled_str = theme.bar_filled.to_string().repeat(filled);
+        let gradient_on = config.get_bool("gradient", true);
+        let filled_str = if gradient_on && filled > 0 {
+            let mut s = String::new();
+            for i in 0..filled {
+                let t = i as f64 / (bar_width.saturating_sub(1) as f64).max(1.0);
+                let (r, g, b) = crate::core::animation::gradient(&theme.success, &theme.danger, t);
+                s.push_str(&ansi::ansi_fg(
+                    &theme.bar_filled.to_string(),
+                    &format!("#{:02x}{:02x}{:02x}", r, g, b),
+                ));
+            }
+            s
+        } else {
+            let color = if pct >= critical {
+                &theme.danger
+            } else if pct >= warn {
+                &theme.warning
+            } else {
+                &theme.success
+            };
+            ansi::ansi_fg(&theme.bar_filled.to_string().repeat(filled), color)
+        };
         let empty_str = theme.bar_empty.to_string().repeat(empty);
         format!("ctx {}{}{} {:.0}% {}/{} tok",
-            ansi::ansi_fg(&filled_str, color),
+            filled_str,
             ansi::ansi_fg(&empty_str, &theme.border),
             ansi::ansi_reset(),
             pct,
@@ -56,5 +76,85 @@ fn format_k(n: u64) -> String {
         format!("{:.1}k", n as f64 / 1000.0)
     } else {
         n.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::session::SessionData;
+    use crate::core::widget::{Widget, WidgetConfig};
+
+    fn session_data(pct: f64) -> SessionData {
+        SessionData::from_stdin_json(
+            &format!(
+                r#"{{"model":{{"id":"m","display_name":"M"}},
+                    "context_window":{{"used_percentage":{},"total_input_tokens":1000,
+                                     "total_output_tokens":2000,"context_window_size":200000}},
+                    "cost":{{"total_cost_usd":0.0,"total_duration_ms":0}}}}"#,
+                pct
+            ),
+        )
+        .unwrap()
+    }
+
+    fn cfg(gradient: bool) -> WidgetConfig {
+        WidgetConfig {
+            values: [
+                ("bar_width".to_string(), "4".to_string()),
+                ("gradient".to_string(), gradient.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    /// 统计输出中不同的 truecolor 色码（38;2;R;G;B）。
+    fn distinct_colors(out: &str) -> Vec<&str> {
+        let mut v: Vec<&str> = Vec::new();
+        for part in out.split("\x1b[") {
+            if let Some(code) = part.strip_prefix("38;2;") {
+                let end = code.find('m').unwrap_or(code.len());
+                let c = &code[..end];
+                if !v.contains(&c) {
+                    v.push(c);
+                }
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn gradient_on_produces_multiple_colors() {
+        let data = session_data(90.0);
+        let out = ContextBar.render_compact(&data, &Theme::default(), &cfg(true));
+        let colors = distinct_colors(&out);
+        assert!(
+            colors.len() >= 3,
+            "gradient on must yield >=3 distinct colors (cells + border), got {:?}: {}",
+            colors, out
+        );
+        assert!(colors.contains(&"163;190;140"), "start cell = success: {}", out);
+        assert!(colors.contains(&"191;97;106"), "end cell = danger: {}", out);
+    }
+
+    #[test]
+    fn gradient_off_uses_single_filled_color() {
+        let data = session_data(97.0);
+        let out = ContextBar.render_compact(&data, &Theme::default(), &cfg(false));
+        let colors = distinct_colors(&out);
+        assert!(
+            colors.len() <= 2,
+            "gradient off must yield at most 2 colors (filled + border), got {:?}: {}",
+            colors, out
+        );
+        assert!(colors.contains(&"191;97;106"), "pct 97 >= critical 95 → danger: {}", out);
+    }
+
+    #[test]
+    fn gradient_empty_bar_no_crash() {
+        let data = session_data(3.4); // filled = round(3.4/100*4) = 0
+        let out = ContextBar.render_compact(&data, &Theme::default(), &cfg(true));
+        assert!(out.contains("ctx "), "empty bar still renders: {}", out);
     }
 }

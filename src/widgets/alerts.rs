@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use crate::core::ansi;
+use crate::core::animation;
 use crate::core::session::SessionData;
 use crate::core::state;
 use crate::core::theme::Theme;
@@ -36,8 +37,9 @@ impl Widget for Alerts {
         let cost_warn = config.get_f64("cost_warn_usd", 10.0);
 
         if pct >= critical {
-            let color = if time_phase(8) < 4 { &theme.danger } else { &theme.warning };
-            alerts.push(ansi::ansi_fg(&format!("⚠ ctx {:.0}%", pct), color));
+            let (r, g, b) = animation::breathe(&theme.danger, animation::now_phase(4.0));
+            let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
+            alerts.push(ansi::ansi_fg(&format!("⚠ ctx {:.0}%", pct), &hex));
         } else if pct >= warn {
             alerts.push(ansi::ansi_fg(&format!("ctx {:.0}%", pct), &theme.warning));
         }
@@ -105,22 +107,3 @@ impl Widget for Alerts {
     }
 }
 
-/// Seconds-based phase so the breathing animation survives across 5s
-/// render processes (per-process frame counters would freeze the phase).
-fn time_phase(period: u64) -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() % period)
-        .unwrap_or(0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn time_phase_is_periodic() {
-        assert!(time_phase(8) < 8);
-        assert_eq!(time_phase(8), time_phase(8));
-    }
-}

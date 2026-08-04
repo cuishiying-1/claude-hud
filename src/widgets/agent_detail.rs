@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::core::ansi;
-use crate::core::animation::AnimationState;
+use crate::core::animation;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::transcript::TranscriptSummary;
@@ -38,15 +38,11 @@ fn format_dur(secs: u64) -> String {
 
 pub struct AgentDetail {
     summary: Mutex<Option<TranscriptSummary>>,
-    anim: Mutex<AnimationState>,
 }
 
 impl AgentDetail {
     pub fn new() -> Self {
-        Self {
-            summary: Mutex::new(None),
-            anim: Mutex::new(AnimationState::new()),
-        }
+        Self { summary: Mutex::new(None) }
     }
 }
 
@@ -73,7 +69,8 @@ impl Widget for AgentDetail {
                     let now = crate::core::state::now_secs();
                     let is_stalled = is_stalled(agent, summary, now, stall_secs);
                     let status = if is_stalled {
-                        ansi::ansi_fg("◐", &theme.danger)
+                        let (r, g, b) = animation::breathe(&theme.danger, animation::now_phase(4.0));
+                        ansi::ansi_fg("◐", &format!("#{:02x}{:02x}{:02x}", r, g, b))
                     } else {
                         ansi::ansi_fg("◐", &theme.success)
                     };
@@ -104,14 +101,10 @@ impl Widget for AgentDetail {
         theme: &Theme,
         config: &WidgetConfig,
     ) {
-        if let Ok(ref mut guard) = self.anim.lock() {
-            guard.tick();
-        }
-        let anim = self.anim.lock().ok();
-        let is_stalled_anim = anim
-            .as_ref()
-            .and_then(|a| a.neon_breathing(&theme.danger))
-            .unwrap_or_else(|| Theme::parse_hex(&theme.danger).unwrap_or((255, 0, 0)));
+        let is_stalled_anim = {
+            let (r, g, b) = animation::breathe(&theme.danger, animation::now_phase(4.0));
+            Color::Rgb(r, g, b)
+        };
 
         let mut lines: Vec<Line> = vec![];
         lines.push(Line::from(Span::styled(
@@ -127,7 +120,7 @@ impl Widget for AgentDetail {
                     let is_stalled =
                         is_stalled(agent, summary, now, config.get_u64("stall_threshold_sec", 30));
                     let status_color = if is_stalled {
-                        Color::Rgb(is_stalled_anim.0, is_stalled_anim.1, is_stalled_anim.2)
+                        is_stalled_anim
                     } else if agent.is_active {
                         ansi::parse_ratatui_color(&theme.success)
                     } else {

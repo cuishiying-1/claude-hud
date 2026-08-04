@@ -4,6 +4,16 @@
 
 - 安装使用流程简化：一键安装/卸载脚本、`setup` 自动合并、`uninstall`/`doctor` 子命令、`icon_set = "auto"` 零依赖字体决议
 
+## [0.6.0] - 2026-08-04 (v0.4 视觉批次)
+
+### Added
+- 动画系统重建为时间相位纯函数（now_phase/breathe/gradient/ease_out/scanline_offset，`CLAUDE_HUD_PHASE` env 黑盒确定性）；删除 frame 制 AnimationState
+- context_bar 渐变进度条：逐 cell truecolor 渐变替 3 档变色（接线既有 `gradient` 配置键，默认开）
+- 新 widget `token_rate`：紧凑 `tok 3.1k/min` 速率文本 + 仪表盘最近 24 桶盲文频谱竖条（token_timeline 数据源；空数据 `—`）
+- dashboard CRT 扫描线背景（`[dashboard] scanlines`，默认开）+ 伪 3D 面板（focus/tabbed accent 边框 + 偏移阴影）
+- tabbed 布局补全：四态布局循环 + 顶部 tab 条 + `←`/`→` 切换（noir-tabbed mod 声明的 Tabbed 布局不再是 focus 别名）
+- 缓动计数器（仪表盘 cost_display 0.8s ease-out；紧凑进程重生单帧不适用，拍板确认）
+
 ## [0.5.0] - 2026-08-04 (v0.3 性能与卫生批次)
 
 ### Added

@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Text;
@@ -7,7 +9,50 @@ use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::widget::{Widget, WidgetConfig};
 
-pub struct CostDisplay;
+const EASE_DURATION: f64 = 0.8;
+
+/// 仪表盘缓动计数器（唯一进程内动画状态）：target 变化重置锚点，
+/// ease_out 曲线 0.8s 内从当前显示值滚到新值。
+struct EasedValue {
+    target: f64,
+    start: f64,
+    elapsed: f64,
+}
+
+impl EasedValue {
+    fn new() -> Self {
+        Self { target: 0.0, start: 0.0, elapsed: 0.0 }
+    }
+
+    /// 帧推进：delta = 距上帧秒数；target 变化 → 以当前显示值为锚点重置。
+    fn tick(&mut self, target: f64, delta: f64) -> f64 {
+        if self.target != target {
+            self.start = self.value();
+            self.target = target;
+            self.elapsed = 0.0;
+        }
+        self.elapsed = (self.elapsed + delta.max(0.0)).min(EASE_DURATION);
+        self.value()
+    }
+
+    fn value(&self) -> f64 {
+        self.start + (self.target - self.start) * crate::core::animation::ease_out(self.elapsed / EASE_DURATION)
+    }
+}
+
+pub struct CostDisplay {
+    eased: Mutex<EasedValue>,
+    last_frame: Mutex<std::time::Instant>,
+}
+
+impl CostDisplay {
+    pub fn new() -> Self {
+        Self {
+            eased: Mutex::new(EasedValue::new()),
+            last_frame: Mutex::new(std::time::Instant::now()),
+        }
+    }
+}
 
 impl Widget for CostDisplay {
     fn id(&self) -> &str { "cost_display" }
@@ -43,9 +88,15 @@ impl Widget for CostDisplay {
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, config: &WidgetConfig) {
+        let now = std::time::Instant::now();
+        let delta = now
+            .duration_since(*self.last_frame.lock().expect("frame clock"))
+            .as_secs_f64();
+        *self.last_frame.lock().expect("frame clock") = now;
+        let display_cost = self.eased.lock().expect("eased value").tick(data.cost.total_cost_usd, delta);
         let dur = data.cost.total_duration_ms / 1000;
         let mut text = format!("Cost: ${:.4} | {}m {}s | +{}/-{} lines",
-            data.cost.total_cost_usd, dur / 60, dur % 60, data.cost.total_lines_added, data.cost.total_lines_removed);
+            display_cost, dur / 60, dur % 60, data.cost.total_lines_added, data.cost.total_lines_removed);
         // ⑲ 未命中 [pricing] → 完整数据视图标注（命中时省略）
         if !config.get_bool("pricing_configured", false) {
             text.push_str(&format!(" | 未配置单价 (model.id: {})", data.model.id));
@@ -67,7 +118,7 @@ pub fn format_tokens(n: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_tokens, CostDisplay};
+    use super::{format_tokens, CostDisplay, EasedValue};
     use crate::core::session::SessionData;
     use crate::core::theme::Theme;
     use crate::core::widget::{Widget, WidgetConfig};
@@ -112,7 +163,7 @@ mod tests {
             ("cost_estimated", "true"),
             ("budget_cap_usd", "5.0"),
         ]);
-        let out = CostDisplay.render_compact(&data, &theme, &config);
+        let out = CostDisplay::new().render_compact(&data, &theme, &config);
         assert!(out.contains("· 62%"), "got: {}", out);
         assert!(out.contains("≈$3.10"), "got: {}", out);
     }
@@ -122,7 +173,7 @@ mod tests {
         let data = session_data();
         let theme = Theme::default();
         let config = cfg(&[("effective_cost", "3.1"), ("cost_estimated", "true")]);
-        let out = CostDisplay.render_compact(&data, &theme, &config);
+        let out = CostDisplay::new().render_compact(&data, &theme, &config);
         assert!(!out.contains('%'), "got: {}", out);
     }
 
@@ -136,7 +187,31 @@ mod tests {
         )
         .unwrap();
         let theme = Theme::default();
-        let out = CostDisplay.render_compact(&data, &theme, &WidgetConfig::default());
+        let out = CostDisplay::new().render_compact(&data, &theme, &WidgetConfig::default());
         assert_eq!(out, "—");
+    }
+
+    #[test]
+    fn ease_reaches_target_after_duration() {
+        let mut v = EasedValue::new();
+        assert_eq!(v.tick(100.0, 0.0), 0.0);
+        assert!((v.tick(100.0, 0.4) - 75.0).abs() < 0.001, "t=0.5 → ease 0.75");
+        assert_eq!(v.tick(100.0, 0.4), 100.0); // elapsed clamp 0.8 → 1.0
+    }
+
+    #[test]
+    fn target_change_resets_anchor_to_current_display() {
+        let mut v = EasedValue::new();
+        v.tick(100.0, 0.8); // settle at 100
+        assert_eq!(v.tick(50.0, 0.0), 100.0); // 锚点 = 当前显示值，未开始移动
+        assert!((v.tick(50.0, 0.4) - 62.5).abs() < 0.001); // 100→50, t=0.5 → ease 0.75 → 62.5
+        assert_eq!(v.tick(50.0, 0.4), 50.0);
+    }
+
+    #[test]
+    fn negative_delta_clamped() {
+        let mut v = EasedValue::new();
+        v.tick(100.0, -1.0);
+        assert_eq!(v.tick(100.0, 0.0), 0.0); // elapsed 不倒退
     }
 }

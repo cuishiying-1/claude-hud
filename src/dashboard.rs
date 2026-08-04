@@ -9,11 +9,14 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::text::{Line, Text};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::alert;
+use crate::core::ansi;
+use crate::core::animation;
 use crate::core::config::AppConfig;
 use crate::core::history::HistoryStore;
 use crate::core::pricing;
@@ -56,6 +59,7 @@ fn run_loop(
     let mut last_agent_count: usize = 0;
     let mut notified_stalled: HashSet<String> = HashSet::new();
     let mut layout_name = config.dashboard.default_layout.clone();
+    let mut tab_idx: usize = 0;
     let mut show_help = false;
 
     // 启动时从 state.json 恢复：数据（新鲜快照）、transcript 游标、告警冷却
@@ -154,7 +158,7 @@ fn run_loop(
             .draw(|frame| {
                 draw_dashboard(
                     frame, registry, &data, theme, config, summary.as_ref(),
-                    &layout_name, show_help,
+                    &layout_name, tab_idx, show_help,
                 );
             })
             .map_err(|e| format!("draw: {}", e))?;
@@ -176,6 +180,16 @@ fn run_loop(
                     KeyCode::Char('?') => {
                         show_help = !show_help;
                     }
+                    KeyCode::Left | KeyCode::Right => {
+                        if layout_name == "tabbed" {
+                            let len = config.compact_layout.len();
+                            tab_idx = next_tab(
+                                tab_idx,
+                                len,
+                                if key.code == KeyCode::Left { -1 } else { 1 },
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -192,14 +206,24 @@ pub fn agents_edge(prev: usize, cur: usize) -> Option<usize> {
     }
 }
 
-/// ⑯ 'l' 键布局循环：grid-2x2 → sidebar → focus → grid-2x2；未知值从 grid-2x2 起步。
+/// ⑯ 'l' 键布局循环：grid-2x2 → sidebar → focus → tabbed → grid-2x2；未知值从 grid-2x2 起步。
 pub fn next_layout(cur: &str) -> String {
     match cur {
         "grid-2x2" => "sidebar".to_string(),
         "sidebar" => "focus".to_string(),
-        "focus" => "grid-2x2".to_string(),
+        "focus" => "tabbed".to_string(),
+        "tabbed" => "grid-2x2".to_string(),
         _ => "grid-2x2".to_string(),
     }
+}
+
+/// tab 切换（wrap）：dir>0 右移，dir<0 左移；len=0 → 0。
+pub fn next_tab(cur: usize, len: usize, dir: i8) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let d = if dir > 0 { 1 } else { len - 1 };
+    (cur + d) % len
 }
 
 fn draw_dashboard(
@@ -210,6 +234,7 @@ fn draw_dashboard(
     config: &AppConfig,
     summary: Option<&TranscriptSummary>,
     layout_name: &str,
+    tab_idx: usize,
     show_help: bool,
 ) {
     let area = frame.area();
@@ -234,23 +259,36 @@ fn draw_dashboard(
     let footer_area = areas[areas.len() - 1];
     let help_area = if show_help { Some(areas[1]) } else { None };
 
-    let layout = match layout_name {
-        "sidebar" => build_sidebar(main_area),
-        "focus" | "tabbed" => build_single_panel(main_area),
-        _ => build_grid_2x2(main_area),
-    };
+    if config.dashboard.scanlines {
+        render_scanlines(frame, main_area, theme);
+    }
 
-    // Map widgets to panels (use compact_layout order as panel assignment)
-    let widget_ids: Vec<&str> = config.compact_layout.iter()
-        .map(|s| s.as_str())
-        .collect();
-
-    for (i, panel_area) in layout.iter().enumerate() {
-        let widget_id = widget_ids.get(i).copied().unwrap_or("context_bar");
-        if let Some(widget) = registry.get(widget_id) {
-            let mut widget_config = config.widget_config(widget_id);
-            pricing::inject_cost(data, summary, config, &mut widget_config);
-            widget.render_dashboard(data, *panel_area, frame, theme, &widget_config);
+    if layout_name == "tabbed" {
+        draw_tabbed(
+            frame, registry, data, theme, config, summary, main_area, tab_idx,
+        );
+    } else {
+        let layout = match layout_name {
+            "sidebar" => build_sidebar(main_area),
+            "focus" => vec![main_area],
+            _ => build_grid_2x2(main_area),
+        };
+        // Map widgets to panels (use compact_layout order as panel assignment)
+        let widget_ids: Vec<&str> = config.compact_layout.iter()
+            .map(|s| s.as_str())
+            .collect();
+        for (i, panel_area) in layout.iter().enumerate() {
+            let widget_id = widget_ids.get(i).copied().unwrap_or("context_bar");
+            let render_area = if layout_name == "focus" {
+                render_pseudo3d(*panel_area, frame, theme)
+            } else {
+                *panel_area
+            };
+            if let Some(widget) = registry.get(widget_id) {
+                let mut widget_config = config.widget_config(widget_id);
+                pricing::inject_cost(data, summary, config, &mut widget_config);
+                widget.render_dashboard(data, render_area, frame, theme, &widget_config);
+            }
         }
     }
 
@@ -297,18 +335,110 @@ fn build_sidebar(area: ratatui::layout::Rect) -> Vec<ratatui::layout::Rect> {
     vec![columns[0], right[0], right[1]]
 }
 
-fn build_single_panel(area: ratatui::layout::Rect) -> Vec<ratatui::layout::Rect> {
-    vec![area]
+/// 伪 3D 面板：accent 边框（光源）+ 右下偏移 1 格 border 色阴影块
+/// （ratatui 0.29 无按侧边框样式，用偏移阴影实现 bevel 立体感）。
+/// 返回内边距 1 的内容区。
+fn render_pseudo3d(area: ratatui::layout::Rect, frame: &mut Frame, theme: &Theme) -> ratatui::layout::Rect {
+    use ratatui::layout::Margin;
+    use ratatui::widgets::{Block, Borders};
+    if area.width < 3 || area.height < 3 {
+        return area;
+    }
+    let panel = ratatui::layout::Rect::new(area.x, area.y, area.width - 1, area.height - 1);
+    let shadow = ratatui::layout::Rect::new(area.x + 1, area.y + 1, panel.width, panel.height);
+    frame.render_widget(
+        Block::bordered()
+            .border_style(Style::default().fg(ansi::parse_ratatui_color(&theme.border))),
+        shadow,
+    );
+    frame.render_widget(
+        Block::bordered()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(ansi::parse_ratatui_color(&theme.accent))),
+        panel,
+    );
+    panel.inner(Margin::new(1, 1))
 }
 
-/// 帮助面板高度（6 行内容 + 边框 2 行）。
-const HELP_PANEL_HEIGHT: u16 = 8;
+/// tabbed 布局：顶部 1 行 tab 条（compact_layout 各 widget 名，激活项 accent）
+/// + 下方伪 3D 内容面板（当前 tab 的 widget）。
+fn draw_tabbed(
+    frame: &mut Frame,
+    registry: &WidgetRegistry,
+    data: &SessionData,
+    theme: &Theme,
+    config: &AppConfig,
+    summary: Option<&TranscriptSummary>,
+    area: ratatui::layout::Rect,
+    tab_idx: usize,
+) {
+    let tab_bar = ratatui::layout::Rect::new(area.x, area.y, area.width, 1);
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, id) in config.compact_layout.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let name = registry
+            .get(id)
+            .map(|w| w.display_name().to_string())
+            .unwrap_or_else(|| id.clone());
+        let color = if i == tab_idx {
+            ansi::parse_ratatui_color(&theme.accent)
+        } else {
+            ansi::parse_ratatui_color(&theme.muted)
+        };
+        spans.push(Span::styled(name, Style::default().fg(color)));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), tab_bar);
+
+    let content = ratatui::layout::Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let inner = render_pseudo3d(content, frame, theme);
+    let widget_id = config
+        .compact_layout
+        .get(tab_idx)
+        .cloned()
+        .unwrap_or_else(|| "context_bar".to_string());
+    if let Some(widget) = registry.get(&widget_id) {
+        let mut widget_config = config.widget_config(&widget_id);
+        pricing::inject_cost(data, summary, config, &mut widget_config);
+        widget.render_dashboard(data, inner, frame, theme, &widget_config);
+    }
+}
+
+/// CRT 扫描线背景层：每 4 行一行 border 色 dim 行 + 1 行 accent 扫描带
+/// （相位行进）。widget 渲染在其上，不遮挡内容。
+fn render_scanlines(frame: &mut Frame, area: ratatui::layout::Rect, theme: &Theme) {
+    let scan_row = animation::scanline_offset(animation::now_phase(8.0), area.height);
+    let mut lines: Vec<Line> = Vec::new();
+    for y in 0..area.height {
+        let color = if y == scan_row {
+            Some(&theme.accent)
+        } else if y % 4 == 0 {
+            Some(&theme.border)
+        } else {
+            None
+        };
+        let line = match color {
+            Some(c) => Line::styled(
+                " ".repeat(area.width as usize),
+                Style::default().fg(ansi::parse_ratatui_color(c)),
+            ),
+            None => Line::raw(" ".repeat(area.width as usize)),
+        };
+        lines.push(line);
+    }
+    frame.render_widget(Paragraph::new(Text::from(lines)), area);
+}
+
+/// 帮助面板高度（7 行内容 + 边框 2 行）。
+const HELP_PANEL_HEIGHT: u16 = 9;
 
 /// ⑯ 帮助面板：全部按键 + 全局生效说明。
 fn render_help(frame: &mut Frame, area: ratatui::layout::Rect, config: &AppConfig) {
     let lines = vec![
         Line::from("q / Esc  quit"),
-        Line::from("l        cycle layout (grid-2x2 → sidebar → focus)"),
+        Line::from("l        cycle layout (grid-2x2 → sidebar → focus → tabbed)"),
+        Line::from("←/→      switch tab (tabbed)"),
         Line::from("?        toggle this help"),
         Line::from(""),
         Line::from("Layout & mod changes are global — they apply to all windows"),
@@ -378,15 +508,25 @@ mod tests {
     }
 
     #[test]
-    fn next_layout_cycles_three_layouts() {
+    fn next_layout_cycles_four_layouts() {
         assert_eq!(next_layout("grid-2x2"), "sidebar");
         assert_eq!(next_layout("sidebar"), "focus");
-        assert_eq!(next_layout("focus"), "grid-2x2");
+        assert_eq!(next_layout("focus"), "tabbed");
+        assert_eq!(next_layout("tabbed"), "grid-2x2");
     }
 
     #[test]
     fn next_layout_unknown_starts_from_grid() {
         assert_eq!(next_layout(""), "grid-2x2");
-        assert_eq!(next_layout("tabbed"), "grid-2x2");
+        assert_eq!(next_layout("weird"), "grid-2x2");
+    }
+
+    #[test]
+    fn next_tab_wraps_both_directions() {
+        assert_eq!(next_tab(0, 4, 1), 1);
+        assert_eq!(next_tab(3, 4, 1), 0);
+        assert_eq!(next_tab(0, 4, -1), 3);
+        assert_eq!(next_tab(2, 4, -1), 1);
+        assert_eq!(next_tab(0, 0, 1), 0);
     }
 }

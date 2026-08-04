@@ -1121,8 +1121,85 @@ P5 = [
                     "[pricing]\n"
                     "\"deepseek-v4-flash\" = { input = 0.001, output = 0.002 }\n"),
                 note="⑳：cap_usd 默认 0 → 占比隐藏（成本组照常 ≈$3.10）"),
+    render_case("P5-12a", "渐变进度条逐 cell 渐变（默认开）", "P5",
+                {"exit": 0,
+                 "stdout_contains": ["\x1b[38;2;163;190;140m", "\x1b[38;2;191;97;106m"]},
+                stdin=j(full_dict(**{"context_window.used_percentage": 90})),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"context_bar\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"
+                    "[widgets.context_bar]\nbar_width = \"4\"\n"),
+                note="v0.4：bar 4 cell 全 filled（90%），cell0=success #a3be8c、cell3=danger #bf616a → 两端 truecolor 色码同现"),
+    render_case("P5-12b", "gradient=false 回退 3 档单色", "P5",
+                {"exit": 0,
+                 "stdout_contains": ["\x1b[38;2;191;97;106m"],
+                 "stdout_not_contains": ["\x1b[38;2;163;190;140m"]},
+                stdin=j(full_dict(**{"context_window.used_percentage": 97})),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"context_bar\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"
+                    "[widgets.context_bar]\nbar_width = \"4\"\ngradient = \"false\"\n"),
+                note="v0.4：gradient=false → 97% ≥ critical 95 → 整段 danger 单色，success 色码缺席"),
+    render_case("P5-13a", "呼吸 env 相位 0.25 全亮", "P5",
+                {"exit": 0,
+                 "stdout_contains": ["\x1b[38;2;191;97;106m"]},
+                stdin=j(full_dict(**{"context_window.used_percentage": 99})),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"alerts\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"),
+                env_extra={"CLAUDE_HUD_PHASE": "0.25"},
+                note="v0.4：⚠ ctx 99% critical 呼吸色，phase 0.25 → k=1 → danger 原色 #bf616a"),
+    render_case("P5-13b", "呼吸 env 相位 0 变暗", "P5",
+                {"exit": 0,
+                 "stdout_contains": ["\x1b[38;2;138;70;76m"]},
+                stdin=j(full_dict(**{"context_window.used_percentage": 99})),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"alerts\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"),
+                env_extra={"CLAUDE_HUD_PHASE": "0"},
+                note="v0.4：phase 0 → 亮度 0.725 → 191/97/106 × 0.725 = 138/70/76"),
+    render_case("P5-14", "token_rate 速率文本（transcript 尾桶）", "P5",
+                {"exit": 0, "stdout_contains": ["tok 3.1k/min"]},
+                stdin=j(full_dict()),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"token_rate\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"),
+                transcript_copy="token_rate.jsonl",
+                note="v0.4：尾桶增量 3100 tok（累计 6100 − 前桶 3000）/ 60s 窗口 = 3100/min → 3.1k/min"),
+    render_case("P5-15", "token_rate 无数据降级 —", "P5",
+                {"exit": 0, "stdout_contains": ["—"],
+                 "stdout_not_contains": ["tok "]},
+                stdin=j(full_dict()),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"token_rate\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"),
+                note="v0.4：无 transcript → timeline 空 → —（与成本组零数据降级同口径）"),
 ]
 
 
 CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5
-assert len(CASES) == 141, f"expected 141 cases, got {len(CASES)}"
+assert len(CASES) == 147, f"expected 147 cases, got {len(CASES)}"

@@ -59,16 +59,31 @@ fn default_separator() -> String {
     " │ ".into()
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DashboardConfig {
     #[serde(default = "default_refresh")]
     pub refresh_interval_ms: u64,
     #[serde(default = "default_dash_layout")]
     pub default_layout: String,
+    #[serde(default = "default_scanlines")]
+    pub scanlines: bool,
 }
 
 fn default_refresh() -> u64 { 500 }
 fn default_dash_layout() -> String { "grid-2x2".into() }
+fn default_scanlines() -> bool { true }
+
+// 手动 Default：使 Rust 默认（setup/mod reset 写出的 config.toml）与 serde 默认一致，
+// 并修正此前 Rust 默认 refresh=0 的潜在忙轮询（DEPLOY.md 文档值即 500）。
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self {
+            refresh_interval_ms: 500,
+            default_layout: "grid-2x2".into(),
+            scanlines: true,
+        }
+    }
+}
 
 /// [alerts] section: thresholds (0 = disabled) and cooldown window.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -330,6 +345,7 @@ impl Default for AppConfig {
                 "agent_overview".into(),
                 "cost_display".into(),
                 "skills_mcp".into(),
+                "token_rate".into(),
                 "alerts".into(),
             ],
             dashboard: DashboardConfig::default(),

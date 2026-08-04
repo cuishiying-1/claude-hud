@@ -142,6 +142,8 @@ Daily cost (last 7 days):
 
 紧凑模式输出做**宽度感知**：以 `COLUMNS` 环境变量为宽度源（statusLine 场景下终端不会真正 resize，环境变量是唯一可靠信号）。超出可用宽度时从行尾整组丢弃直至适配；单字段超过 24 字符（model 名 / git 分支 / 代理名）截断并加 `…`。`COLUMNS` 缺失或非法时默认 80 列，最小钳制 40 列。
 
+> **v0.4 视觉增强**：context_bar 进度条默认逐 cell truecolor 渐变（success→danger；`gradient = "false"` 回退 3 档变色）；token_rate 显示 `tok 3.1k/min` 速率文本（transcript 尾桶增量口径，无数据时 `—`）；alerts 临界与 agent_detail 卡顿标记使用 4s 呼吸动画（`CLAUDE_HUD_PHASE` env 可固定相位用于测试）。逐 cell ANSI 色码不影响宽度口径（fit_line 先剥 ANSI 再测宽）。
+
 ```bash
 COLUMNS=100 claude-hud render < data.json   # 指定宽度
 ```
@@ -176,6 +178,7 @@ compact_layout = [
     "agent_overview",
     "cost_display",
     "skills_mcp",
+    "token_rate",
     "alerts",
 ]
 
@@ -183,12 +186,13 @@ separator = " │ "
 
 [dashboard]
 refresh_interval_ms = 500
-default_layout = "grid-2x2"    # grid-2x2 | sidebar | focus（仪表盘内按 `l` 循环切换并持久化到此键）
+default_layout = "grid-2x2"    # grid-2x2 | sidebar | focus | tabbed（仪表盘内按 `l` 循环切换并持久化到此键）
+scanlines = true               # CRT 扫描线背景（每 4 行一条 dim 行 + 行进扫描带）
 
 # Widget 级配置
 [widgets.context_bar]
 bar_width = "18"
-gradient = "true"
+gradient = "true"   # 进度条逐 cell truecolor 渐变（success→danger，默认开；false 回退 3 档变色）
 warn_threshold = "80"
 critical_threshold = "95"
 
@@ -254,7 +258,8 @@ claude-hud mod reset
 | 键 | 功能 |
 |----|------|
 | `q` / `Esc` | 退出仪表盘（会话写入历史库） |
-| `l` | 循环布局 grid-2x2 → sidebar → focus（best-effort 持久化到 config.toml `dashboard.default_layout`） |
+| `l` | 循环布局 grid-2x2 → sidebar → focus → tabbed（best-effort 持久化到 config.toml `dashboard.default_layout`） |
+| `←` / `→` | tabbed 布局下切换 tab（wrap 环绕） |
 | `?` | 开合帮助面板 |
 
 底部 1 行常驻提示条：`Layout: <当前布局> · Mod: <当前 Mod> · l=cycle ?=help q=quit`。
