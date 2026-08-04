@@ -30,11 +30,14 @@ pub fn agents_complete(count: usize) {
     );
 }
 
-/// Convenience: cost threshold exceeded.
-pub fn cost_threshold(cost: f64, threshold: f64) {
+/// Convenience: cost threshold exceeded (symbol from config.currency_symbol).
+pub fn cost_threshold(cost: f64, threshold: f64, symbol: &str) {
     send(
-        "¥ Cost Warning",
-        &format!("Session cost ¥{:.2} exceeded threshold ¥{:.2}.", cost, threshold),
+        "Cost Warning",
+        &format!(
+            "Session cost {}{:.2} exceeded threshold {}{:.2}.",
+            symbol, cost, symbol, threshold
+        ),
     );
 }
 
