@@ -14,6 +14,7 @@ pub enum AlertKind {
     CostThreshold,
     RateLimit,
     Budget,
+    Compaction,
 }
 
 /// Cross-process cooldown state. render 是唯一权威：从 state.json 加载、
@@ -104,6 +105,8 @@ pub fn send_notifications(
                 crate::notify::rate_limit_warning(data.rate_limits.five_hour.used_percentage, lang)
             }
             AlertKind::Budget => {}
+            // ④ 压缩通知不走 send_notifications（run_pipeline 单独接线）。
+            AlertKind::Compaction => {}
         }
     }
 }
@@ -143,6 +146,32 @@ pub fn check_budget(
     Some(tier)
 }
 
+/// ④ 压缩临近检查（纯函数）：eta ≤ threshold 且冷却过期 → 触发并 mark_fired。
+/// 复用 AlertCooldown（Compaction 键）跨进程去重；threshold 0 = 关闭。
+/// eta None（数据不足/速率为 0）→ 不触发。
+pub fn check_compaction(
+    eta_minutes: Option<u64>,
+    threshold_minutes: u64,
+    cooldown_minutes: u64,
+    cooldown: &mut AlertCooldown,
+    now: u64,
+) -> bool {
+    if threshold_minutes == 0 {
+        return false;
+    }
+    let Some(eta) = eta_minutes else { return false };
+    if eta > threshold_minutes {
+        return false;
+    }
+    let window = cooldown_minutes.saturating_mul(60);
+    let last = cooldown.fired_at(AlertKind::Compaction);
+    if last != 0 && now.saturating_sub(last) < window {
+        return false;
+    }
+    cooldown.mark_fired(AlertKind::Compaction, now);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +194,7 @@ mod tests {
             cost_threshold_usd: 10.0,
             rate_limit_pct: 90.0,
             cooldown_minutes: 10,
+            compaction_eta_minutes: 15,
         }
     }
 
@@ -256,5 +286,35 @@ mod tests {
         // 11.0：三档全满足 → 收敛到最高档位 tier 3（不按乱序 index 0 判为 1）
         let mut cd2 = AlertCooldown::default();
         assert_eq!(check_budget(11.0, &messy, 10, 0, &mut cd2, 1), Some(3));
+    }
+
+    #[test]
+    fn compaction_fires_when_eta_below_threshold() {
+        let mut cd = AlertCooldown::default();
+        // eta 10min < threshold 15min → 触发
+        assert!(check_compaction(Some(10), 15, 10, &mut cd, 1000));
+        // 冷却窗口内（同 now 再查）→ 不重复
+        assert!(!check_compaction(Some(5), 15, 10, &mut cd, 1001));
+    }
+
+    #[test]
+    fn compaction_eta_above_threshold_no_fire() {
+        let mut cd = AlertCooldown::default();
+        assert!(!check_compaction(Some(20), 15, 10, &mut cd, 1000));
+        assert!(!check_compaction(None, 15, 10, &mut cd, 1001)); // 数据不足
+    }
+
+    #[test]
+    fn compaction_disabled_when_threshold_zero() {
+        let mut cd = AlertCooldown::default();
+        assert!(!check_compaction(Some(1), 0, 10, &mut cd, 1000));
+    }
+
+    #[test]
+    fn compaction_cooldown_expiry_refires() {
+        let mut cd = AlertCooldown::default();
+        assert!(check_compaction(Some(10), 15, 10, &mut cd, 1000));
+        // 窗口 600s 过期后重发
+        assert!(check_compaction(Some(8), 15, 10, &mut cd, 1601));
     }
 }

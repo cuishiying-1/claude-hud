@@ -139,7 +139,8 @@ fn run_pipeline(
     let now = state::now_secs();
     let mut cooldown = alert::AlertCooldown::from_state(&state.alerts);
     let fired = alert::check_alerts(&data, &config.alerts, &mut cooldown, now);
-    let (effective_cost, _) = pricing::realtime_cost(data, &config.pricing);
+    let (effective_cost, _) =
+        pricing::realtime_cost(data, &pricing::merged_pricing(config));
     alert::send_notifications(
         &fired,
         &data,
@@ -166,6 +167,23 @@ fn run_pipeline(
             &config.currency_symbol,
             config.language(),
         );
+    }
+    // ④ 压缩临近通知：复用 compaction_prediction（render 权威，跨进程去重同
+    // [alerts] 冷却）。阈值 0 = 关闭；数据不足（None）不触发。
+    let eta = summary.compaction_prediction(
+        data.context_window.used_percentage,
+        data.context_window.context_window_size,
+    );
+    if alert::check_compaction(
+        eta,
+        config.alerts.compaction_eta_minutes,
+        config.alerts.cooldown_minutes,
+        &mut cooldown,
+        now,
+    ) {
+        if let Some(m) = eta {
+            crate::notify::compaction(m, config.language());
+        }
     }
     state.alerts = cooldown.to_state();
 

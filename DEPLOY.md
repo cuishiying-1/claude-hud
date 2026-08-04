@@ -125,8 +125,8 @@ Daily cost (last 7 days):
 
 状态栏成本有两条计算路径：
 
-- **命中 `[pricing]`**：按 stdin 会话累计 token（input/output）× 单价重算，并带 `≈` 前缀（实时路径无 cache 数据，必然低估；混合模型会话重算不准确，建议固定模型或依赖透传）。模型 ID 以 stdin 的 `model.id` 为准（`claude-hud render --dump` 可查）。
-- **未命中 `[pricing]`**：透传 Claude Code 官方 `total_cost_usd`（含 cache，准确，无 `≈`）。Web 仪表盘与 dashboard 完整数据视图会显示"当前模型未配置单价"提示。
+- **命中 `[pricing]`（内置表或用户表）**：按 stdin 会话累计 token（input/output/cache_read/cache_creation）× 单价重算，并带 `≈` 前缀。内置价格表覆盖 9 个主流模型（2026-07 官方价目，cache_read = 0.1×input、cache_creation = 1.25×input），用户 `[pricing]` 可覆盖任意模型——cache 权重为估算（缓存字段缺失时为 0 按旧公式计）；混合模型会话重算不准确，建议固定模型或依赖透传。模型 ID 以 stdin 的 `model.id` 为准（`claude-hud render --dump` 可查）。
+- **未命中（内置表与用户表均无）**：透传 Claude Code 官方 `total_cost_usd`（含 cache，准确，无 `≈`）。Web 仪表盘与 dashboard 完整数据视图会显示"当前模型未配置单价"提示。
 
 零数据降级：网关无 usage/cost 时成本组显示 `—`（不显示 `$0.00` 假精确）。
 
@@ -137,6 +137,12 @@ Daily cost (last 7 days):
 - dashboard 不接预算：其 transcript 精确成本与预算的 `≈` 实时语义冲突。
 - 与 `[alerts].cost_threshold_usd` 并存互不干扰，先到者先发。
 - **状态栏占比（v0.3）**：配置了 `cap_usd` 且成本 > 0 时，cost_display 组尾追加 ` · NN%`（实时成本 ÷ cap）；`cap_usd = 0`（默认关闭）时占比隐藏。
+- **成本速率（v0.6）**：有成本且活跃时长 > 0 时，cost_display 组尾追加 ` · ≈$X.X/h`（成本 ÷ 小时化时长）；零时长/零成本不显示（诚实降级）。
+
+### 压缩预测（④）
+
+- **状态栏标注**：context_bar 组尾 `compact ≈Nm`（transcript 首尾桶 token 增量 ÷ 时间 → 速率，线性外推剩余窗口分钟数）；时间轴不可靠 / 桶 < 2 / 速率为 0 时不显示（诚实降级）。
+- **临近通知**：`[alerts].compaction_eta_minutes`（默认 15，0 = 关闭）——预测剩余 ≤ 阈值时发桌面通知；复用 `[alerts].cooldown_minutes` 跨进程去重（判定在 render 进程，不开 dashboard 也能收到）。
 
 ### 国际化（v0.5）
 
@@ -215,6 +221,14 @@ stall_threshold_sec = "30"
 cap_usd = 5.0              # 会话成本上限（0 = 关闭预算，默认关闭）
 warn_pcts = [50, 80, 100]  # 达到这些百分比时通知，每档一次（单调递进）
                            # cap > 0 时状态栏 cost_display 组尾显示占比（如 · 62%）
+
+# 告警阈值与冷却（默认值；0 = 关闭对应项）
+[alerts]
+context_critical_pct = 95.0
+cost_threshold_usd = 10.0
+rate_limit_pct = 90.0
+cooldown_minutes = 10             # 冷却窗口：同一种告警在此时间内最多发一次
+compaction_eta_minutes = 15       # 压缩临近通知：预测剩余 ≤ 此分钟数时发（0 = 关闭）
 
 # 临时覆盖（不修改 Mod 本身）
 [runtime_overrides]

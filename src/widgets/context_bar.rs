@@ -1,18 +1,52 @@
+use std::sync::Mutex;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::Gauge;
 
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
+use crate::core::transcript::TranscriptSummary;
 use crate::core::widget::{Widget, WidgetConfig};
 
-pub struct ContextBar;
+/// ④ 内部可变性：Widget trait 是 &self，transcript summary 用 Mutex 存
+/// （token_rate 同款模式），render 时锁读做压缩外推。
+pub struct ContextBar {
+    summary: Mutex<Option<TranscriptSummary>>,
+}
+
+impl ContextBar {
+    pub fn new() -> Self {
+        Self { summary: Mutex::new(None) }
+    }
+
+    /// ④ 压缩预测（分钟）：复用 transcript::compaction_prediction（v0.1 斜率
+    /// 模块）；时间轴不可靠 / 桶 <2 / 速率为 0 → None（诚实降级，不显示）。
+    fn compaction_eta(&self, data: &SessionData) -> Option<u64> {
+        self.summary
+            .lock()
+            .ok()
+            .as_deref()
+            .and_then(|o| o.as_ref())
+            .and_then(|s| {
+                s.compaction_prediction(
+                    data.context_window.used_percentage,
+                    data.context_window.context_window_size,
+                )
+            })
+    }
+}
 
 impl Widget for ContextBar {
     fn id(&self) -> &str { "context_bar" }
     fn display_name(&self) -> &str { "Context Bar" }
+
+    fn update_transcript(&self, summary: &TranscriptSummary) {
+        *self.summary.lock().expect("context bar summary") = Some(summary.clone());
+    }
 
     fn render_compact(&self, data: &SessionData, theme: &Theme, config: &WidgetConfig) -> String {
         let pct = data.context_window.used_percentage;
@@ -45,13 +79,25 @@ impl Widget for ContextBar {
             ansi::ansi_fg(&theme.bar_filled.to_string().repeat(filled), color)
         };
         let empty_str = theme.bar_empty.to_string().repeat(empty);
-        format!("ctx {}{}{} {:.0}% {}/{} tok",
+        let mut out = format!("ctx {}{}{} {:.0}% {}/{} tok",
             filled_str,
             ansi::ansi_fg(&empty_str, &theme.border),
             ansi::ansi_reset(),
             pct,
             format_k(data.context_window.total_input_tokens),
-            format_k(data.context_window.total_output_tokens))
+            format_k(data.context_window.total_output_tokens));
+        // ④ 压缩预测标注（数据不足 → 无标注，诚实降级）。
+        if let Some(m) = self.compaction_eta(data) {
+            out.push_str(&format!(
+                " · {}",
+                ansi::ansi_fg(
+                    &tr(config.lang, "widget.compaction_eta")
+                        .replace("{m}", &m.to_string()),
+                    &theme.muted,
+                )
+            ));
+        }
+        out
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, config: &WidgetConfig) {
@@ -62,10 +108,21 @@ impl Widget for ContextBar {
         let color = if pct >= 95.0 { ansi::parse_ratatui_color(&theme.danger) }
             else if pct >= warn { ansi::parse_ratatui_color(&theme.warning) }
             else { ansi::parse_ratatui_color(&theme.success) };
+        // ④ dashboard 上下文卡片同样标注（数据不足 → 无标注）。
+        let label = format!("{:.0}% — {}/{} tokens", pct, used, max);
+        let label = if let Some(m) = self.compaction_eta(data) {
+            format!(
+                "{label} · {}",
+                tr(config.lang, "widget.compaction_eta")
+                    .replace("{m}", &m.to_string())
+            )
+        } else {
+            label
+        };
         frame.render_widget(
             Gauge::default().gauge_style(Style::default().fg(color))
                 .ratio(pct / 100.0)
-                .label(format!("{:.0}% — {}/{} tokens", pct, used, max)),
+                .label(label),
             area);
     }
 }
@@ -83,6 +140,7 @@ fn format_k(n: u64) -> String {
 mod tests {
     use super::*;
     use crate::core::session::SessionData;
+    use crate::core::transcript::{TokenSnapshot, TranscriptSummary};
     use crate::core::widget::{Widget, WidgetConfig};
 
     fn session_data(pct: f64) -> SessionData {
@@ -128,7 +186,7 @@ mod tests {
     #[test]
     fn gradient_on_produces_multiple_colors() {
         let data = session_data(90.0);
-        let out = ContextBar.render_compact(&data, &Theme::default(), &cfg(true));
+        let out = ContextBar::new().render_compact(&data, &Theme::default(), &cfg(true));
         let colors = distinct_colors(&out);
         assert!(
             colors.len() >= 3,
@@ -142,7 +200,7 @@ mod tests {
     #[test]
     fn gradient_off_uses_single_filled_color() {
         let data = session_data(97.0);
-        let out = ContextBar.render_compact(&data, &Theme::default(), &cfg(false));
+        let out = ContextBar::new().render_compact(&data, &Theme::default(), &cfg(false));
         let colors = distinct_colors(&out);
         assert!(
             colors.len() <= 2,
@@ -155,7 +213,31 @@ mod tests {
     #[test]
     fn gradient_empty_bar_no_crash() {
         let data = session_data(3.4); // filled = round(3.4/100*4) = 0
-        let out = ContextBar.render_compact(&data, &Theme::default(), &cfg(true));
+        let out = ContextBar::new().render_compact(&data, &Theme::default(), &cfg(true));
         assert!(out.contains("ctx "), "empty bar still renders: {}", out);
+    }
+
+    #[test]
+    fn compact_eta_shown_when_prediction_available() {
+        let data = session_data(68.0);
+        let bar = ContextBar::new();
+        let mut s = TranscriptSummary::default();
+        s.timestamps_reliable = true;
+        s.token_timeline.push(TokenSnapshot { timestamp_secs: 0, input_tokens: 100, output_tokens: 50, total_tokens: 150 });
+        s.token_timeline.push(TokenSnapshot { timestamp_secs: 60, input_tokens: 300, output_tokens: 130, total_tokens: 430 });
+        bar.update_transcript(&s);
+        let out = bar.render_compact(&data, &Theme::default(), &cfg(true));
+        // window=200000 (session_data 构造) → remaining 64000, rate 280/60 → 228m
+        assert!(out.contains("compact ≈228m"), "eta text: {}", out);
+    }
+
+    #[test]
+    fn compact_eta_hidden_when_insufficient_data() {
+        let data = session_data(68.0);
+        let bar = ContextBar::new();
+        let s = TranscriptSummary::default(); // 空 timeline → 无预测
+        bar.update_transcript(&s);
+        let out = bar.render_compact(&data, &Theme::default(), &cfg(true));
+        assert!(!out.contains("compact ≈"), "no eta text: {}", out);
     }
 }

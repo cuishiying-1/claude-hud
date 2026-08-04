@@ -225,31 +225,37 @@ fn contract_probe() {
 }
 
 /// ⑭ [pricing] 校验：负单价为 failure（含模型名定位）；否则信息项。
+/// ① 末尾追加内置表信息项（与用户表无关，恒显示）。
 fn pricing_check(config: &AppConfig, lang: Language, failures: &mut usize) {
     if config.pricing.is_empty() {
         println!("{}", tr(lang, "runtime.d_no_pricing"));
-        return;
-    }
-    let bad: Vec<&str> = config
-        .pricing
-        .iter()
-        .filter(|(_, p)| {
-            p.input < 0.0 || p.output < 0.0 || p.cache_read < 0.0 || p.cache_creation < 0.0
-        })
-        .map(|(m, _)| m.as_str())
-        .collect();
-    if bad.is_empty() {
-        println!(
-            "{}",
-            tr(lang, "runtime.d_pricing_ok").replace("{n}", &config.pricing.len().to_string())
-        );
     } else {
-        println!(
-            "{}",
-            tr(lang, "runtime.d_pricing_neg").replace("{models}", &bad.join(", "))
-        );
-        *failures += 1;
+        let bad: Vec<&str> = config
+            .pricing
+            .iter()
+            .filter(|(_, p)| {
+                p.input < 0.0 || p.output < 0.0 || p.cache_read < 0.0 || p.cache_creation < 0.0
+            })
+            .map(|(m, _)| m.as_str())
+            .collect();
+        if bad.is_empty() {
+            println!(
+                "{}",
+                tr(lang, "runtime.d_pricing_ok").replace("{n}", &config.pricing.len().to_string())
+            );
+        } else {
+            println!(
+                "{}",
+                tr(lang, "runtime.d_pricing_neg").replace("{models}", &bad.join(", "))
+            );
+            *failures += 1;
+        }
     }
+    println!(
+        "{}",
+        tr(lang, "runtime.d_builtin_pricing")
+            .replace("{n}", &crate::core::pricing::builtin_pricing().len().to_string())
+    );
 }
 
 /// ⑱ 升级检查（信息项，永不计数为 failure）。

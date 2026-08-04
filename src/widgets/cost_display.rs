@@ -80,6 +80,13 @@ impl Widget for CostDisplay {
             format_tokens(t_in),
             format_tokens(t_out)
         );
+        // ③ 成本速率：成本 ÷ 活跃时长（小时）。零时长/零成本 → 不显示（诚实降级）。
+        let duration_ms = data.cost.total_duration_ms;
+        if cost > 0.0 && duration_ms > 0 {
+            let hours = duration_ms as f64 / 3_600_000.0;
+            let rate = cost / hours;
+            group.push_str(&format!(" · {}{}{:.1}/h", prefix, symbol, rate));
+        }
         // ⑳ 预算占比：仅当配置了 cap 且成本 > 0 时显示（避免 0/0 噪音）。
         let budget_cap = config.get_f64("budget_cap_usd", 0.0);
         if budget_cap > 0.0 && cost > 0.0 {
@@ -152,6 +159,47 @@ mod tests {
                 .collect(),
             lang: crate::core::i18n::Language::En,
         }
+    }
+
+    fn session_with_duration(ms: u64) -> SessionData {
+        SessionData::from_stdin_json(
+            &format!(
+                r#"{{"model":{{"id":"m","display_name":"M"}},
+                    "context_window":{{"total_input_tokens":1000,"total_output_tokens":2000,
+                                     "context_window_size":200000}},
+                    "cost":{{"total_cost_usd":0.0,"total_duration_ms":{}}}}}"#,
+                ms
+            ),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn rate_shown_when_duration_and_cost_present() {
+        let data = session_with_duration(600_000); // 10min
+        let theme = Theme::default();
+        let config = cfg(&[("effective_cost", "1.8"), ("cost_estimated", "true")]);
+        let out = CostDisplay::new().render_compact(&data, &theme, &config);
+        // 1.8 / (10/60)h = 10.8
+        assert!(out.contains("≈$10.8/h"), "rate segment: {}", out);
+    }
+
+    #[test]
+    fn rate_hidden_when_duration_zero() {
+        let data = session_data(); // duration 0
+        let theme = Theme::default();
+        let config = cfg(&[("effective_cost", "1.8"), ("cost_estimated", "true")]);
+        let out = CostDisplay::new().render_compact(&data, &theme, &config);
+        assert!(!out.contains("/h"), "no rate segment: {}", out);
+    }
+
+    #[test]
+    fn rate_hidden_when_cost_zero() {
+        let data = session_with_duration(600_000);
+        let theme = Theme::default();
+        let config = cfg(&[("effective_cost", "0"), ("cost_estimated", "false")]);
+        let out = CostDisplay::new().render_compact(&data, &theme, &config);
+        assert!(!out.contains("/h"), "no rate segment: {}", out);
     }
 
     #[test]

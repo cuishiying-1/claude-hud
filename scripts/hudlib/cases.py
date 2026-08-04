@@ -1268,6 +1268,117 @@ P7 = [
                 note="⑩ 有 subagent → activity 布局（含 agents 段）"),
 ]
 
-CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7
-# 152 + 4（P7-01..04）= 156（批次 III 布局补全）
-assert len(CASES) == 156, f"expected 156 cases, got {len(CASES)}"
+
+def b1_cases():
+    """批次 I ①：内置模型价格库。"""
+    return [
+        render_case(
+            "B1-01", "① 内置价格命中 → ≈ 估算出现", "batch1",
+            {"exit": 0, "stdout_contains": ["≈$"]},
+            stdin=j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                 "context_window.total_input_tokens": 100000,
+                                 "context_window.total_output_tokens": 50000})),
+            config=DEFAULT_CONFIG,
+            note="sonnet-4-6 在内置表 → realtime 重算带 ≈（显式干净 config，防 P7 残留单行布局）"),
+        render_case(
+            "B1-02", "① 用户 [pricing] 覆盖内置表", "batch1",
+            {"exit": 0, "stdout_contains": ["≈$1.30"]},
+            stdin=j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                 "context_window.total_input_tokens": 100000,
+                                 "context_window.total_output_tokens": 50000})),
+            config=("active_mod = \"glacier-workstation\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"model_display\", \"context_bar\", "
+                    "\"agent_overview\", \"cost_display\", \"skills_mcp\", \"alerts\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"
+                    "[pricing]\n"
+                    "claude-sonnet-4-6 = { input = 1e-5, output = 6e-6 }\n"),
+            note="用户 1e-5×100k + 6e-6×50k = 1.30（内置 3e-6/15e-6 应为 1.05）"),
+        render_case(
+            "B1-03", "① 未收录模型 → 透传（无 ≈）", "batch1",
+            {"exit": 0, "stdout_not_contains": ["≈"]},
+            stdin=j(full_dict(**{"model": {"id": "deepseek-v4-flash", "display_name": "DeepSeek"},
+                                 "cost.total_cost_usd": 0.42})),
+            config=DEFAULT_CONFIG,
+            note="deepseek 不在内置表 → 透传官方成本"),
+    ]
+
+
+def b2_cases():
+    """批次 I ②：实时成本 cache 权重。"""
+    return [
+        render_case(
+            "B2-01", "② cache 字段按单价加权（sonnet 内置）", "batch1",
+            {"exit": 0, "stdout_contains": ["≈$1.17"]},
+            stdin=j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                 "context_window.total_input_tokens": 100000,
+                                 "context_window.total_output_tokens": 50000,
+                                 "context_window.current_usage.cache_read_input_tokens": 20000,
+                                 "context_window.current_usage.cache_creation_input_tokens": 30000})),
+            config=DEFAULT_CONFIG,
+            note="0.30 + 0.75 + 0.006 + 0.1125 = 1.1685 → ≈$1.17（显式干净 config，防 B1-02 pricing 泄漏）"),
+    ]
+
+
+def b3_cases():
+    """批次 I ③：成本速率。"""
+    return [
+        render_case(
+            "B3-01", "③ 含时长 → 速率段显示", "batch1",
+            {"exit": 0, "stdout_contains": ["· ≈$10.8/h"]},
+            stdin=j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                 "context_window.total_input_tokens": 100000,
+                                 "context_window.total_output_tokens": 100000,
+                                 "cost.total_duration_ms": 600000})),
+            config=DEFAULT_CONFIG,
+            note="1.8 × 6（10min → 小时化）= 10.8"),
+        render_case(
+            "B3-02", "③ 零时长 → 无速率段", "batch1",
+            {"exit": 0, "stdout_not_contains": ["/h"]},
+            stdin=j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                 "context_window.total_input_tokens": 100000,
+                                 "context_window.total_output_tokens": 100000,
+                                 "cost.total_duration_ms": 0})),
+            config=DEFAULT_CONFIG,
+            note="零时长 → 诚实降级"),
+    ]
+
+
+def b4_cases():
+    """批次 I ④：压缩预测文本。timestamps.jsonl → 2 桶（150→430，60s）→ 228m。"""
+    return [
+        render_case(
+            "B4-01", "④ 压缩预测 en（timestamps fixture）", "batch1",
+            {"exit": 0, "stdout_contains": ["compact ≈228m"]},
+            stdin=j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                 "context_window.used_percentage": 68,
+                                 "context_window.context_window_size": 200000,
+                                 "transcript_path": fx("transcript/timestamps.jsonl")})),
+            config=DEFAULT_CONFIG,
+            note="2 桶 150→430 over 60s → remaining 64000 → 228m"),
+        render_case(
+            "B4-02", "④ 压缩预测 zh", "batch1",
+            {"exit": 0, "stdout_contains": ["压缩≈228m"]},
+            stdin=j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                 "context_window.used_percentage": 68,
+                                 "context_window.context_window_size": 200000,
+                                 "transcript_path": fx("transcript/timestamps.jsonl")})),
+            config=DEFAULT_CONFIG,
+            env_extra={"CLAUDE_HUD_CONFIG": fx("config/i18n_zh.toml")},
+            note="zh locale 文本（env 注入临时 config，同 P6 模式）"),
+        render_case(
+            "B4-03", "④ 无 transcript → 无预测（诚实降级）", "batch1",
+            {"exit": 0, "stdout_not_contains": ["compact ≈", "压缩≈"]},
+            stdin=j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                 "context_window.used_percentage": 68,
+                                 "context_window.context_window_size": 200000})),
+            config=DEFAULT_CONFIG,
+            note="无 transcript → 数据不足 → 无标注"),
+    ]
+
+
+CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7 \
+    + b1_cases() + b2_cases() + b3_cases() + b4_cases()
+# 156 + 3（B1-01..03）+ 1（B2-01）+ 2（B3-01/02）+ 3（B4-01/02/03）= 165（批次 I ①②③④）
+assert len(CASES) == 165, f"expected 165 cases, got {len(CASES)}"

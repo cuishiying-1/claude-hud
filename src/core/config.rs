@@ -103,12 +103,16 @@ pub struct AlertsConfig {
     pub rate_limit_pct: f64,
     #[serde(default = "default_cooldown")]
     pub cooldown_minutes: u64,
+    /// ④ 压缩临近通知阈值（分钟；0 = 关闭，默认 15）。
+    #[serde(default = "default_compaction_eta")]
+    pub compaction_eta_minutes: u64,
 }
 
 fn default_ctx_critical() -> f64 { 95.0 }
 fn default_cost_threshold() -> f64 { 10.0 }
 fn default_rate_limit() -> f64 { 90.0 }
 fn default_cooldown() -> u64 { 10 }
+fn default_compaction_eta() -> u64 { 15 }
 
 impl Default for AlertsConfig {
     fn default() -> Self {
@@ -117,6 +121,7 @@ impl Default for AlertsConfig {
             cost_threshold_usd: 10.0,
             rate_limit_pct: 90.0,
             cooldown_minutes: 10,
+            compaction_eta_minutes: 15,
         }
     }
 }
@@ -394,6 +399,7 @@ mod tests {
         assert_eq!(a.cost_threshold_usd, 10.0);
         assert_eq!(a.rate_limit_pct, 90.0);
         assert_eq!(a.cooldown_minutes, 10);
+        assert_eq!(a.compaction_eta_minutes, 15);
     }
 
     #[test]

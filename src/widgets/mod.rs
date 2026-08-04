@@ -19,7 +19,7 @@ use crate::core::widget::WidgetRegistry;
 /// Register all Phase 1-3 widgets.
 pub fn register_all(registry: &mut WidgetRegistry, _config: &crate::core::config::AppConfig) {
     // Phase 1
-    registry.register(Box::new(context_bar::ContextBar));
+    registry.register(Box::new(context_bar::ContextBar::new()));
     registry.register(Box::new(model_display::ModelDisplay));
     registry.register(Box::new(cost_display::CostDisplay::new()));
     registry.register(Box::new(agent_overview::AgentOverview));

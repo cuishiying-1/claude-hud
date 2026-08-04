@@ -60,6 +60,14 @@ pub fn agent_stalled(name: &str, seconds: u64, lang: Language) {
     );
 }
 
+/// Convenience: compaction imminent (④; eta in minutes).
+pub fn compaction(minutes: u64, lang: Language) {
+    send(
+        tr(lang, "notify.compaction"),
+        &tr(lang, "notify.compaction_body").replace("{m}", &minutes.to_string()),
+    );
+}
+
 /// Convenience: budget tier reached (⑳; cost is the realtime estimate).
 pub fn budget(pct: f64, cap: f64, symbol: &str, lang: Language) {
     send(
