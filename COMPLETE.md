@@ -636,20 +636,20 @@ irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/insta
 
 ### ✅ 完整实现
 
-CLI 23 子命令 · 14 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 预设 + 字体探测 · 图标 auto 决议 · 6 出厂 Mod · Transcript 增量解析与统计 · 紧凑渲染管线 · 仪表盘 4 布局 · Web 面板 · SQLite 历史数据层 · 5 类 OS 通知 · setup/uninstall/doctor · 一键安装脚本 ×2 平台 · CI 发布矩阵 · 单元测试 + 黑盒测试套件 · 数据通路（state.json 5 段全量原子写 + Transcript 跨进程游标累计 + 告警跨进程冷却 + 越阈告警配置化 + doctor 自检 last_error 上报）· 输入契约（subagentStatusLine/扁平 rate_limits 双形态 + render --dump 键分类 + doctor 契约探针）· 真实时间轴（ISO8601 主时间轴 + timestamps_reliable 降级 + epoch 60s 分桶 + 真实卡顿/压缩预测）· 成本正确性（currency_symbol 全局 + [pricing] 三态重算 + context_bar tokens + doctor 负单价校验）· 配置契约（ThemeRef 双形态 + 四层叠加 + 失败警告 + import 落盘）· Mod 真相（use 校验 + previous_mod + @scene + save 快照 + 渲染灌入 + pick）· ANSI 整段上色（4 widget + 黑盒 ANSI 结构断言）· 历史库消费（history 三块输出 + render 会话切换自动结账 + serve weekly 字段 + Web This Week 卡片 + 黑盒用例 130 例）· Shell Widget 跨平台（Windows cmd /C、Unix sh -c + 死代码清理）· 补全真实现（clap_complete：bash/zsh/fish/powershell）· 零宽度感知（COLUMNS 宽度源 + fit_line 组级截断 + 字段 24 字符截断）· dashboard 交互（l 布局循环 + default_layout 持久化 + ? 帮助面板 + 底部 footer + ←/→ tab 切换）· 通知全接线（5/5 + 进程内去重）· 安装健壮性（无 release 明确报错 + 三态输出 + setup 时间戳备份）· 全局生效提示（写配置命令 8 处 `(applies to all windows)`）· 升级通路（update check 404/离线降级 + doctor update:）· v0.2 成本哨兵（realtime_cost 双轨 + cost_display 合并单组 `≈$X · Xk/Xk tok` + 零数据 `—` 降级 + `[budget]` 档位单调/跨进程冷却 + doctor 档位读取 + `history --weekly` 五指标 + serve 周趋势曲线 + 黑盒用例 138 例）· v0.3 性能与卫生（token_timeline 360 桶上限 + 结账 path→ts 表去重（振荡防 double-billing）+ serve 历史 30s TTL 缓存 + 状态栏预算占比 `· NN%` + 17 个构建 warning 清零（动画原语收缩/死代码清理）+ 黑盒用例 141 例）· v0.4 视觉批次（时间相位动画重建 + 6 效果接线 + tabbed 布局补全 + 黑盒用例 147 例）· v0.5 国际化（language 键 + en/zh 表 + 回退链 + clap 后处理注入 + serve JS T 表 + doctor/main 全量接入 + CLAUDE_HUD_CONFIG env 注入 + 黑盒用例 152 例）
+CLI 23 子命令 · 14 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 预设 + 字体探测 · 图标 auto 决议 · 6 出厂 Mod · Transcript 增量解析与统计 · 紧凑渲染管线 · 仪表盘 4 布局 · Web 面板 · SQLite 历史数据层 · 5 类 OS 通知 · setup/uninstall/doctor · 一键安装脚本 ×2 平台 · CI 发布矩阵 · 单元测试 + 黑盒测试套件 · 数据通路（state.json 5 段全量原子写 + Transcript 跨进程游标累计 + 告警跨进程冷却 + 越阈告警配置化 + doctor 自检 last_error 上报）· 输入契约（subagentStatusLine/扁平 rate_limits 双形态 + render --dump 键分类 + doctor 契约探针）· 真实时间轴（ISO8601 主时间轴 + timestamps_reliable 降级 + epoch 60s 分桶 + 真实卡顿/压缩预测）· 成本正确性（currency_symbol 全局 + [pricing] 三态重算 + context_bar tokens + doctor 负单价校验）· 配置契约（ThemeRef 双形态 + 四层叠加 + 失败警告 + import 落盘）· Mod 真相（use 校验 + previous_mod + @scene + save 快照 + 渲染灌入 + pick）· ANSI 整段上色（4 widget + 黑盒 ANSI 结构断言）· 历史库消费（history 三块输出 + render 会话切换自动结账 + serve weekly 字段 + Web This Week 卡片 + 黑盒用例 130 例）· Shell Widget 跨平台（Windows cmd /C、Unix sh -c + 死代码清理）· 补全真实现（clap_complete：bash/zsh/fish/powershell）· 零宽度感知（COLUMNS 宽度源 + fit_line 组级截断 + 字段 24 字符截断）· dashboard 交互（l 布局循环 + default_layout 持久化 + ? 帮助面板 + 底部 footer + ←/→ tab 切换）· 通知全接线（5/5 + 进程内去重）· 安装健壮性（无 release 明确报错 + 三态输出 + setup 时间戳备份）· 全局生效提示（写配置命令 8 处 `(applies to all windows)`）· 升级通路（update check 404/离线降级 + doctor update:）· v0.2 成本哨兵（realtime_cost 双轨 + cost_display 合并单组 `≈$X · Xk/Xk tok` + 零数据 `—` 降级 + `[budget]` 档位单调/跨进程冷却 + doctor 档位读取 + `history --weekly` 五指标 + serve 周趋势曲线 + 黑盒用例 138 例）· v0.3 性能与卫生（token_timeline 360 桶上限 + 结账 path→ts 表去重（振荡防 double-billing）+ serve 历史 30s TTL 缓存 + 状态栏预算占比 `· NN%` + 17 个构建 warning 清零（动画原语收缩/死代码清理）+ 黑盒用例 141 例）· v0.4 视觉批次（时间相位动画重建 + 6 效果接线 + tabbed 布局补全 + 黑盒用例 147 例）· v0.5 国际化（language 键 + en/zh 表 + 回退链 + clap 后处理注入 + serve JS T 表 + doctor/main 全量接入 + CLAUDE_HUD_CONFIG env 注入 + 黑盒用例 152 例）· 批次 III 布局补全（agent-centric/kpi/contextual 真实实现 + contextual 动态两态（subagent 判据）+ 未实现布局回归改接 hex-2x3 + 黑盒用例 156 例 + 单元测试 151 个）
 
 ### 🟡 部分实现 / 占位
 
 | 项 | 现状 |
 |----|------|
 | 仪表盘布局 | hex-2x3/freeform 未实现 |
-| Mod 布局 ID | agent-centric/kpi/contextual/full 未实现（报 "not implemented"），仅 minimal/activity 映射 |
+| Mod 布局 ID | full 未实现（报 "not implemented"）；minimal/activity/agent-centric/kpi/contextual 已实现（批次 III 补全后 6 个出厂 Mod 全部真实渲染） |
 | 动画 | 6 效果已接线（渐变进度条/呼吸/缓动计数器/CRT 扫描线/伪 3D 面板/盲文频谱）；其余装饰效果按拍板砍除 |
 | 历史展示（TUI） | TUI 仪表盘趋势面板未实现（Web 面板已有 This Week 卡片） |
 
 ### ⬜ 设计蓝图未实现（见 DESIGN.md）
 
-紧凑 6 布局（minimal/activity/agent-centric/full/contextual/kpi 仅元数据）· 仪表盘 6 布局中的 2 种 · 15 种动画效果中的多数 · 主题市场 install user/repo · 多会话监控 · Homebrew tap
+紧凑布局 full（minimal/activity/agent-centric/contextual/kpi 已实现，批次 III）· 仪表盘 6 布局中的 2 种 · 15 种动画效果中的多数 · 主题市场 install user/repo · 多会话监控 · Homebrew tap
 
 ---
 
@@ -669,8 +669,9 @@ CLI 23 子命令 · 14 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 �
 | v0.2 成本哨兵（⑲⑳㉑，2026-08-04） | 实时成本状态栏（双轨 + 合并单组）+ 预算告警（档位单调/跨进程冷却）+ 成本周报（--weekly + serve 周曲线）+ 黑盒用例 138 例 + 单元测试 112 个 | ✅（㉑ 使用价值待用户反馈验证） |
 | v0.4 视觉批次（动画 6 效果 + tabbed，2026-08-04） | 时间相位动画重建（CLAUDE_HUD_PHASE 确定性）+ 渐变进度条/呼吸/缓动计数器/CRT 扫描线/伪 3D 面板/盲文频谱 + tabbed 布局补全 + 黑盒用例 147 例 + 单元测试 136 个 | ✅ |
 | v0.5 国际化（2026-08-04） | language 键 + en/zh 字符串表 + 回退链 + 运行时/clap/Web 三面覆盖 + 黑盒用例 152 例 + 单元测试 147 个 | ✅ |
+| v0.6 批次 III 布局补全（2026-08-04） | agent-centric/kpi/contextual 真实实现 + contextual 动态两态 + 6 个出厂 Mod 全渲染 + 黑盒用例 156 例 + 单元测试 151 个 | ✅ |
 | Phase 5 持续迭代 | 更多主题、性能优化 | ⬜ |
 
 ---
 
-*本文档基于源码（src/ 共约 4100 行）与现有文档（DESIGN/PLUGIN/DEPLOY/README/CHANGELOG）整理，生成于 2026-07-31，更新于 2026-08-04（Phase 4 batch C 剩余 ⑨⑩⑪⑮⑯⑰⑱ + v0.2 成本哨兵 + v0.3 性能与卫生 + v0.4 视觉批次交付回写）。*
+*本文档基于源码（src/ 共约 4100 行）与现有文档（DESIGN/PLUGIN/DEPLOY/README/CHANGELOG）整理，生成于 2026-07-31，更新于 2026-08-04（Phase 4 batch C 剩余 ⑨⑩⑪⑮⑯⑰⑱ + v0.2 成本哨兵 + v0.3 性能与卫生 + v0.4 视觉批次 + v0.5 国际化 + v0.6 批次 III 布局补全交付回写）。*

@@ -22,6 +22,16 @@ pub const ACTIVITY_WIDGETS: [&str; 7] = [
     "model_display", "context_bar", "agent_overview",
     "git_status", "skills_mcp", "cost_display", "rate_limits",
 ];
+/// 出厂 agent-centric 布局（obsidian-command：重度代理三行，代理信息前置）。
+pub const AGENT_CENTRIC_WIDGETS: [&str; 6] = [
+    "agent_overview", "model_display", "context_bar",
+    "cost_display", "skills_mcp", "token_rate",
+];
+/// 出厂 kpi 布局（ember-night：深夜编码双行，成本/token 速率优先）。
+pub const KPI_WIDGETS: [&str; 6] = [
+    "model_display", "context_bar", "cost_display",
+    "token_rate", "agent_overview", "alerts",
+];
 
 /// 布局解析：compact_widgets 快照 > 布局 ID 映射（minimal/activity）> 其他。
 /// 未知布局 ID 返回 Err（render 报错路径，hud_err_marker 上屏）。
@@ -29,6 +39,7 @@ pub fn layout_from_mod(
     compact_widgets: Option<&Vec<String>>,
     layout_compact: &str,
     lang: Language,
+    active: bool,
 ) -> Result<Vec<String>, String> {
     if let Some(widgets) = compact_widgets {
         return Ok(widgets.clone());
@@ -36,6 +47,11 @@ pub fn layout_from_mod(
     let ids: &[&str] = match layout_compact {
         "minimal" => &MINIMAL_WIDGETS,
         "activity" => &ACTIVITY_WIDGETS,
+        "agent-centric" => &AGENT_CENTRIC_WIDGETS,
+        "kpi" => &KPI_WIDGETS,
+        "contextual" => {
+            if active { &ACTIVITY_WIDGETS } else { &MINIMAL_WIDGETS }
+        }
         other => {
             return Err(format!(
                 "{} '{}' {}",
@@ -54,13 +70,14 @@ pub fn lines_from_layers(runtime: Option<u8>, mod_lines: Option<u8>, theme: u8) 
 }
 
 /// 当前生效的 compact widget 数组（mod 灌入优先，fallback config）。
-pub fn resolve_compact_layout(config: &AppConfig) -> Result<Vec<String>, String> {
+pub fn resolve_compact_layout(config: &AppConfig, active: bool) -> Result<Vec<String>, String> {
     if !config.active_mod.is_empty() {
         if let Ok(pkg) = AppConfig::load_mod(&config.active_mod) {
             return layout_from_mod(
                 pkg.compact_widgets.as_ref(),
                 pkg.layout.as_ref().map(|l| l.compact.as_str()).unwrap_or(""),
                 config.language(),
+                active,
             );
         }
     }
@@ -269,7 +286,11 @@ pub fn render_with_data(
     theme: &Theme,
     _summary: Option<&TranscriptSummary>,
 ) -> Result<String, String> {
-    let layout = resolve_compact_layout(config)?;
+    let active = data
+        .subagent_status_line
+        .as_ref()
+        .map_or(false, |s| !s.agents.is_empty());
+    let layout = resolve_compact_layout(config, active)?;
     if layout.is_empty() {
         return Ok(String::new());
     }
@@ -485,27 +506,66 @@ mod tests {
     #[test]
     fn layout_from_mod_widgets_win() {
         let widgets = vec!["model_display".to_string(), "cost_display".to_string()];
-        let got = layout_from_mod(Some(&widgets), "minimal", Language::En).unwrap();
+        let got = layout_from_mod(Some(&widgets), "minimal", Language::En, false).unwrap();
         assert_eq!(got, widgets);
     }
 
     #[test]
     fn layout_from_mod_minimal_maps() {
-        let got = layout_from_mod(None, "minimal", Language::En).unwrap();
+        let got = layout_from_mod(None, "minimal", Language::En, false).unwrap();
         assert_eq!(got, vec!["model_display", "context_bar", "cost_display", "git_status"]);
     }
 
     #[test]
     fn layout_from_mod_activity_maps() {
-        let got = layout_from_mod(None, "activity", Language::En).unwrap();
+        let got = layout_from_mod(None, "activity", Language::En, false).unwrap();
         assert_eq!(got.len(), 7);
         assert_eq!(got[0], "model_display");
         assert_eq!(got[6], "rate_limits");
     }
 
     #[test]
+    fn layout_from_mod_agent_centric_maps() {
+        let got = layout_from_mod(None, "agent-centric", Language::En, false).unwrap();
+        assert_eq!(
+            got,
+            vec!["agent_overview", "model_display", "context_bar",
+                 "cost_display", "skills_mcp", "token_rate"]
+        );
+    }
+
+    #[test]
+    fn layout_from_mod_kpi_maps() {
+        let got = layout_from_mod(None, "kpi", Language::En, false).unwrap();
+        assert_eq!(
+            got,
+            vec!["model_display", "context_bar", "cost_display",
+                 "token_rate", "agent_overview", "alerts"]
+        );
+    }
+
+    #[test]
+    fn layout_from_mod_contextual_idle_maps_minimal() {
+        let got = layout_from_mod(None, "contextual", Language::En, false).unwrap();
+        assert_eq!(
+            got,
+            vec!["model_display", "context_bar", "cost_display", "git_status"]
+        );
+    }
+
+    #[test]
+    fn layout_from_mod_contextual_active_maps_activity() {
+        let got = layout_from_mod(None, "contextual", Language::En, true).unwrap();
+        assert_eq!(
+            got,
+            vec!["model_display", "context_bar", "agent_overview",
+                 "git_status", "skills_mcp", "cost_display", "rate_limits"]
+        );
+    }
+
+    #[test]
     fn layout_from_mod_unknown_errors() {
-        let err = layout_from_mod(None, "agent-centric", Language::En).unwrap_err();
+        let err = layout_from_mod(None, "hex-2x3", Language::En, false).unwrap_err();
         assert!(err.contains("not implemented"));
     }
 

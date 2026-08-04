@@ -49,6 +49,11 @@ def fx(rel: str) -> str:
     return os.path.join(FIX, rel)
 
 
+def mod_config(name: str) -> str:
+    """启用指定出厂 Mod 的最小配置（无 compact_layout，走 Mod 布局 ID）。"""
+    return f'active_mod = "{name}"\nseparator = " │ "\n'
+
+
 def full_dict(**overrides):
     """Base 'session with data' dict; override nested keys via dot paths."""
     base = {
@@ -365,15 +370,15 @@ D4 = [
                 pre_cmds=[["mod", "use", "glacier-workstation"]],
                 note="use 内置 mod：activity 布局灌入，渲染正常"),
     render_case("D4-02b", "preset obsidian-command", "D4",
-                {"exit": 1, "stdout_contains": ["not implemented"]},
+                {"exit": 0, "stdout_contains": ["deepseek-v4-flash"]},
                 stdin_file="json/full.json", config=DEFAULT_CONFIG,
                 pre_cmds=[["mod", "use", "obsidian-command"]],
-                note="agent-centric 布局未实现 → 渲染明确报错"),
+                note="批次 III：agent-centric 布局灌入，渲染正常（3 行）"),
     render_case("D4-02c", "preset ember-night", "D4",
-                {"exit": 1, "stdout_contains": ["not implemented"]},
+                {"exit": 0, "stdout_contains": ["deepseek-v4-flash"]},
                 stdin_file="json/full.json", config=DEFAULT_CONFIG,
                 pre_cmds=[["mod", "use", "ember-night"]],
-                note="kpi 布局未实现 → 渲染明确报错"),
+                note="批次 III：kpi 布局灌入，渲染正常（2 行）"),
     render_case("D4-02d", "preset matrix-surveillance", "D4",
                 {"exit": 0, "stdout_contains": ["deepseek-v4-flash"]},
                 stdin_file="json/full.json", config=DEFAULT_CONFIG,
@@ -385,10 +390,10 @@ D4 = [
                 pre_cmds=[["mod", "use", "noir-precision"]],
                 note="minimal 布局灌入，渲染正常"),
     render_case("D4-02f", "preset noir-tabbed", "D4",
-                {"exit": 1, "stdout_contains": ["not implemented"]},
+                {"exit": 0, "stdout_contains": ["deepseek-v4-flash"]},
                 stdin_file="json/full.json", config=DEFAULT_CONFIG,
                 pre_cmds=[["mod", "use", "noir-tabbed"]],
-                note="contextual 布局未实现 → 渲染明确报错"),
+                note="批次 III：contextual 布局灌入，渲染正常（1 行）"),
     render_case("D4-03", "主题颜色覆盖", "D4",
                 {"exit": 0, "stdout_contains": ["deepseek-v4-flash", "\x1b[38;2;255;0;0m"]},
                 stdin_file="json/full.json",
@@ -886,12 +891,13 @@ P3 = [
     render_case("P3-11", "未实现布局 ID 明确报错", "P3",
                 {"exit": -1, "stdout_contains": ["not implemented"]},
                 stdin=j(full_dict()), config=(
-                    "active_mod = \"obsidian-command\"\n"
+                    "active_mod = \"hex-layout\"\n"
                     "preset = \"full\"\n"
                     "separator = \" │ \"\n"
                     "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
                     "[widgets]\n"),
-                note="任务⑥：agent-centric 无 compact_widgets → 渲染报错 hud_err_marker 上屏"),
+                pre_cmds=[["mod", "import", fx("mods/hex-layout.toml")]],
+                note="批次 III：真实未知布局 hex-2x3（用户 mod import）→ 渲染报错 hud_err_marker 上屏"),
     render_case("P3-13", "rate_limits 超阈值数字在色内", "P3",
                 {"exit": 0, "stdout_contains": ["92%"],
                  "stdout_raw_regex": r"\x1b\[38;2;[0-9;]+m[^\x1b]*[0-9]+%[^\x1b]*"},
@@ -1234,6 +1240,34 @@ render_case("P6-05", "zh 语言：mod preview 中文行", "P6",
             note="i18n：mod preview 布局/动画行中文（补齐 T6 遗漏行）"),
 ]
 
-CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6
-# 147 + 5（P6-01..05）= 152（与计划数字一致）
-assert len(CASES) == 152, f"expected 152 cases, got {len(CASES)}"
+P7 = [
+    render_case("P7-01", "⑧ obsidian-command：agent-centric 三行", "P7",
+                {"exit": 0, "stdout_regex": r"^[^\n]+\n[^\n]+\n[^\n]+$",
+                 "stdout_contains": ["ctx", "deepseek-v4-flash"]},
+                stdin=j(full_dict()),
+                config=mod_config("obsidian-command"),
+                note="⑧ 布局补全：agent-centric 不再报 layout not implemented，输出 3 行"),
+    render_case("P7-02", "⑨ ember-night：kpi 双行", "P7",
+                {"exit": 0, "stdout_regex": r"^[^\n]+\n[^\n]+$",
+                 "stdout_contains": ["ctx"]},
+                stdin=j(full_dict()),
+                config=mod_config("ember-night"),
+                note="⑨ 布局补全：kpi 输出 2 行"),
+    render_case("P7-03", "⑩ noir-tabbed：contextual 空闲 → minimal 集", "P7",
+                {"exit": 0, "stdout_contains": ["ctx"],
+                 "stdout_not_contains": ["agents"]},
+                stdin=j(full_dict()),
+                config=mod_config("noir-tabbed"),
+                note="⑩ 无 subagent → minimal 布局（无 agents 段）"),
+    render_case("P7-04", "⑩ noir-tabbed：contextual 活跃 → activity 集", "P7",
+                {"exit": 0, "stdout_contains": ["agents"]},
+                stdin=j(full_dict(**{"subagent_status_line": {
+                    "agents": [{"name": "a1", "model": "deepseek-v4-flash",
+                                "is_active": True}]}})),
+                config=mod_config("noir-tabbed"),
+                note="⑩ 有 subagent → activity 布局（含 agents 段）"),
+]
+
+CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7
+# 152 + 4（P7-01..04）= 156（批次 III 布局补全）
+assert len(CASES) == 156, f"expected 156 cases, got {len(CASES)}"

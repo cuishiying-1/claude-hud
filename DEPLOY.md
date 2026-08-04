@@ -322,6 +322,8 @@ url = "https://api.weather.example.com/current"
 refresh_seconds = "300"
 ```
 
+> 布局 ID（`[layout] compact`）全部真实实现：activity / minimal / agent-centric / kpi / contextual；contextual 按 subagent 活跃度动态切换（空闲 → minimal 集，活跃 → activity 集）；未知 ID 报 `layout not implemented` 上屏（doctor 可查）。
+
 ## 故障排除
 
 ### 状态栏不显示
