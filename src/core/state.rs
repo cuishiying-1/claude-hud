@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::config::AppConfig;
 use super::session::{CurrentUsage, SessionData};
@@ -29,6 +29,11 @@ pub struct StateFile {
     /// ⑳ 已触发的最高预算档位（1-based，单调递进；0 = 未触发）。
     #[serde(default)]
     pub budget_tier: usize,
+    /// 结账去重（⑨+）：path → 最近结账时刻。同一 path 在冷却期内最多
+    /// 结账一次（path 抖动 A→B→A→B 时防同一会话 double-billing）。
+    /// 单槽记忆（只记最后一次）在交替振荡下相位错位，无法去重，故用表。
+    #[serde(default)]
+    pub checkout_billed: HashMap<String, u64>,
 }
 
 /// Last render failure, written before exit so doctor can surface it.
@@ -306,6 +311,7 @@ pub const SNAPSHOT_MAX_AGE_SECS: u64 = 30;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn tmp_path(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -325,10 +331,12 @@ mod tests {
         let mut st = StateFile::default();
         st.snapshot.model.display_name = "deepseek-v4-flash".into();
         st.alerts.insert(AlertKind::CostThreshold, 42);
+        st.checkout_billed.insert("/a.jsonl".into(), 42);
         assert!(st.write(&path).is_ok());
         let back = StateFile::read(&path);
         assert_eq!(back.snapshot.model.display_name, "deepseek-v4-flash");
         assert_eq!(back.alerts.get(&AlertKind::CostThreshold), Some(&42));
+        assert_eq!(back.checkout_billed.get("/a.jsonl"), Some(&42));
         cleanup(&path);
     }
 

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::alert;
@@ -139,24 +140,34 @@ fn run_pipeline(
     }
     state.alerts = cooldown.to_state();
 
-    // ⑨ 会话切换结账：transcript_path 变化 → 上一会话写入历史库（失败仅警告，不中断渲染）
+    // ⑨ 会话切换结账：transcript_path 变化 → 上一会话写入历史库（失败仅警告，不中断渲染）。
+    // ⑨+ 去重：prev 路径在冷却期内已结账（path→ts 表）→ 跳过，防 double-billing。
+    let cooldown_secs = config.alerts.cooldown_minutes * 60;
     if should_checkout(
         state.snapshot.timestamp_secs,
         state.snapshot.transcript_path.as_deref(),
         data.transcript_path.as_deref(),
+        &state.checkout_billed,
+        now,
+        cooldown_secs,
     ) {
         match HistoryStore::open() {
             Ok(h) => {
                 let last = state.snapshot.to_session();
-                if let Err(e) = h
-                    .record_session(&last, state.snapshot.agent_count, &config.active_mod)
-                {
+                if let Err(e) = h.record_session(&last, state.snapshot.agent_count) {
                     eprintln!("[claude-hud] warning: session checkout failed: {}", e);
                 }
             }
             Err(e) => eprintln!("[claude-hud] warning: cannot open history db: {}", e),
         }
+        state
+            .checkout_billed
+            .insert(state.snapshot.transcript_path.clone().unwrap_or_default(), now);
     }
+    // 冷却期外的记录不再有用（同 path 再次切换视为新会话）→ 清理，map 有界。
+    state
+        .checkout_billed
+        .retain(|_, ts| now.saturating_sub(*ts) < cooldown_secs);
 
     // 持久化（best-effort：写失败不中断状态栏，仅 stderr 警告）。
     // 脚本/git widget 可能在管线中途写了 cache 窄键 → 先合并磁盘 cache。
@@ -210,10 +221,23 @@ pub fn fit_line(line: &str, sep: &str, max_width: usize) -> String {
 }
 
 /// ⑨ 会话切换结账判定：前次快照有结账信息（ts≠0、path 非空）且 path 变化 → 结账。
-pub fn should_checkout(prev_ts: u64, prev_path: Option<&str>, cur_path: Option<&str>) -> bool {
+/// ⑨+ 去重：prev path 在 `billed`（path→最近结账时刻）中且冷却期内 → 跳过。
+/// 振荡 A→B→A→B 时两 path 交替被记，单槽记忆（只记最后一次）相位错位无法
+/// 去重，故按 path 建表：同 path 在冷却期内最多结账一次。
+pub fn should_checkout(
+    prev_ts: u64,
+    prev_path: Option<&str>,
+    cur_path: Option<&str>,
+    billed: &HashMap<String, u64>,
+    now: u64,
+    cooldown_secs: u64,
+) -> bool {
     prev_ts != 0
         && !prev_path.map(|p| p.is_empty()).unwrap_or(true)
         && prev_path != cur_path
+        && !billed
+            .get(prev_path.unwrap_or(""))
+            .map_or(false, |ts| now.saturating_sub(*ts) < cooldown_secs)
 }
 
 /// Build the stdout error marker for render failures. The message is
@@ -387,12 +411,48 @@ mod tests {
 
     #[test]
     fn should_checkout_four_states() {
-        assert!(!should_checkout(0, Some("/a.jsonl"), Some("/b.jsonl"))); // ts=0 不结账
-        assert!(!should_checkout(100, Some(""), Some("/b.jsonl"))); // prev path 为空
-        assert!(!should_checkout(100, None, Some("/b.jsonl")));
-        assert!(!should_checkout(100, Some("/a.jsonl"), Some("/a.jsonl"))); // 同 path 不重复
-        assert!(should_checkout(100, Some("/a.jsonl"), Some("/b.jsonl"))); // 不同 path
-        assert!(should_checkout(100, Some("/a.jsonl"), None)); // 新会话无 path 也结账
+        let none = HashMap::new();
+        assert!(!should_checkout(0, Some("/a.jsonl"), Some("/b.jsonl"), &none, 2000, 600)); // ts=0 不结账
+        assert!(!should_checkout(100, Some(""), Some("/b.jsonl"), &none, 2000, 600)); // prev path 为空
+        assert!(!should_checkout(100, None, Some("/b.jsonl"), &none, 2000, 600));
+        assert!(!should_checkout(100, Some("/a.jsonl"), Some("/a.jsonl"), &none, 2000, 600)); // 同 path 不重复
+        assert!(should_checkout(100, Some("/a.jsonl"), Some("/b.jsonl"), &none, 2000, 600)); // 不同 path
+        assert!(should_checkout(100, Some("/a.jsonl"), None, &none, 2000, 600)); // 新会话无 path 也结账
+    }
+
+    #[test]
+    fn checkout_skips_rebilling_same_path_within_cooldown() {
+        // prev 路径已在冷却期内结账（path→ts 表）→ 跳过
+        let billed = HashMap::from([("/a".to_string(), 1000)]);
+        assert!(!should_checkout(100, Some("/a"), Some("/b"), &billed, 1200, 600));
+        // 不同路径正常结账
+        let billed_b = HashMap::from([("/a".to_string(), 1000)]);
+        assert!(should_checkout(100, Some("/b"), Some("/c"), &billed_b, 1200, 600));
+        // 从未结账（空表）不挡
+        let empty = HashMap::new();
+        assert!(should_checkout(100, Some("/a"), Some("/b"), &empty, 1200, 600));
+        // 冷却过期（600s 窗口外）放行
+        let stale = HashMap::from([("/a".to_string(), 1000)]);
+        assert!(should_checkout(100, Some("/a"), Some("/b"), &stale, 1700, 600));
+        // 边界：恰好 600s 视为过期（< 判定）
+        assert!(should_checkout(100, Some("/a"), Some("/b"), &stale, 1600, 600));
+    }
+
+    #[test]
+    fn checkout_oscillation_bills_each_path_once() {
+        // A→B→A→B：首轮后两 path 均在冷却期内 → 交替不再记账（防 double-billing）
+        let billed = HashMap::from([
+            ("/a".to_string(), 1000),
+            ("/b".to_string(), 1100),
+        ]);
+        assert!(!should_checkout(100, Some("/a"), Some("/b"), &billed, 1200, 600));
+        assert!(!should_checkout(100, Some("/b"), Some("/a"), &billed, 1300, 600));
+        // 冷却期外的新一轮切换视为新会话
+        let stale = HashMap::from([
+            ("/a".to_string(), 1000),
+            ("/b".to_string(), 1100),
+        ]);
+        assert!(should_checkout(100, Some("/a"), Some("/b"), &stale, 1800, 600));
     }
 
     #[test]

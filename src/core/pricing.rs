@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::config::AppConfig;
 use super::session::SessionData;
-use super::transcript::{TranscriptSummary, TokenTotal};
+use super::transcript::TranscriptSummary;
 use super::widget::WidgetConfig;
 
 /// 模型单价（USD/token）。字段可缺省：缺省按 0 计，重算值偏小并带 ≈ 标注
@@ -112,11 +112,16 @@ pub fn inject_cost_realtime(
             "pricing_configured".into(),
             config.pricing.contains_key(&data.model.id).to_string(),
         );
+    // ⑳ 预算档位（cost_display 组尾显示占比）：cap 为 0 时前端隐藏。
+    widget_config
+        .values
+        .insert("budget_cap_usd".into(), config.budget.cap_usd.to_string());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::transcript::TokenTotal;
 
     fn session(model: &str, official_cost: f64) -> SessionData {
         let json = format!(

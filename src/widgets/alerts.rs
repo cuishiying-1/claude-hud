@@ -100,8 +100,6 @@ impl Widget for Alerts {
         frame.render_widget(Paragraph::new(Text::from(lines)), area);
     }
 
-    fn needs_tick(&self) -> bool { true }
-
     fn update_transcript(&self, summary: &TranscriptSummary) {
         if let Ok(ref mut guard) = self.summary.lock() { **guard = Some(summary.clone()); }
     }

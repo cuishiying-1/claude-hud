@@ -7,7 +7,6 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
 
-use crate::core::ansi;
 use crate::core::scripting::{ScriptEngine, http_poll, run_shell_command};
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;

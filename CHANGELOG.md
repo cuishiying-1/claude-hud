@@ -4,6 +4,21 @@
 
 - 安装使用流程简化：一键安装/卸载脚本、`setup` 自动合并、`uninstall`/`doctor` 子命令、`icon_set = "auto"` 零依赖字体决议
 
+## [0.5.0] - 2026-08-04 (v0.3 性能与卫生批次)
+
+### Added
+- ⑳ 状态栏预算占比：`cap_usd > 0` 且成本 > 0 时 cost_display 组尾追加 `· NN%`（实时 ≈ 成本 ÷ cap；cap 默认 0 隐藏）
+
+### Changed
+- ⑨ 结账去重升级：单槽记忆（只记最后一次结账）在 path 振荡 A→B→A→B 下相位错位无法去重，改为 **path→ts 结账表**（`state.checkout_billed`）——同 path 在冷却期内最多结账一次，振荡不再 double-billing；冷却期外记录自动清理（表有界）
+
+### Performance
+- token_timeline 分桶上限 360（6h 滚动窗口；压缩预测只读首尾桶，不受影响）
+- serve 历史聚合缓存：`/api/data` 2s 轮询不再每次重开 SQLite，30s TTL 命中即回（weekly/trend 分钟级统计）
+
+### Cleanup
+- 17 个构建 warning 清零：animation.rs 收缩为帧计数 + `neon_breathing`（9 个未接线原语 + `Spark`/`hsl_to_rgb` 按拍板删除，v0.4 时间相位重建蓝图保留）；Widget trait 删 `dashboard_size`/`needs_tick`（无调用点 + 6 处覆写）；SubagentInfo 删 3 未读字段；SessionRecord 删 3 未读字段（INSERT/SELECT 同步，CREATE TABLE 不变）；TranscriptEntry 删 `ToolResult`/`UserEntry` 变体（serde(other) 兜底解析不破）；4 处未用 import + `interpolate_hex` 等死代码
+
 ## [0.4.0] - 2026-08-04 (v0.2 成本哨兵批次)
 
 ### Added

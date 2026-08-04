@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tiny_http::{Response, Server};
 
 use crate::core::config::AppConfig;
@@ -7,6 +9,30 @@ use crate::core::theme::Theme;
 use crate::core::widget::WidgetRegistry;
 
 const PORT: u16 = 9527;
+
+/// ⑨+㉑ 历史聚合缓存：前端 2s 轮询 /api/data，weekly/trend 是分钟级统计，
+/// 每请求重开 SQLite 纯属空转。30s TTL 内命中缓存不重查。
+const HISTORY_TTL: Duration = Duration::from_secs(30);
+static HISTORY_CACHE: Mutex<Option<(Instant, String, String)>> = Mutex::new(None);
+// (fetched_at, weekly_json, trend_json)
+
+fn ttl_fresh(fetched_at: Instant, now: Instant, ttl: Duration) -> bool {
+    now.duration_since(fetched_at) < ttl
+}
+
+fn cached_history() -> (String, String) {
+    let mut guard = HISTORY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if let Some((at, weekly, trend)) = guard.as_ref() {
+        if ttl_fresh(*at, now, HISTORY_TTL) {
+            return (weekly.clone(), trend.clone());
+        }
+    }
+    let weekly = weekly_json_inner();
+    let trend = trend_json_inner();
+    *guard = Some((now, weekly.clone(), trend.clone()));
+    (weekly, trend)
+}
 
 /// Launch the web dashboard HTTP server.
 pub fn run(
@@ -76,6 +102,7 @@ fn build_api_json(
         .collect();
 
     let pricing_configured = config.pricing.contains_key(&data.model.id);
+    let (weekly, trend) = cached_history();
     format!(
         r#"{{"model":"{}","model_id":"{}","pricing_configured":{},"context_pct":{},"cost_usd":{},"duration_ms":{},"weekly":{},"trend":{},"widgets":[{}]}}"#,
         data.model.display_name,
@@ -84,14 +111,14 @@ fn build_api_json(
         data.context_window.used_percentage,
         data.cost.total_cost_usd,
         data.cost.total_duration_ms,
-        weekly_json(),
-        trend_json(),
+        weekly,
+        trend,
         widgets_json.join(","),
     )
 }
 
 /// ⑨ 本周聚合统计：open/query 失败 → available:false 全 0（前端显示 —）。
-fn weekly_json() -> String {
+fn weekly_json_inner() -> String {
     let weekly = HistoryStore::open()
         .ok()
         .and_then(|h| h.weekly_stats().ok());
@@ -107,7 +134,7 @@ fn weekly_json() -> String {
 }
 
 /// ㉑ 近 7 天日成本趋势（供周曲线）：open/query 失败或无数据 → available:false。
-fn trend_json() -> String {
+fn trend_json_inner() -> String {
     let trend = HistoryStore::open()
         .ok()
         .and_then(|h| h.daily_cost_trend().ok());
@@ -308,3 +335,17 @@ setInterval(refresh, 2000);
 </html>"#.to_string()
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::ttl_fresh;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn ttl_fresh_boundary() {
+        let t0 = Instant::now();
+        assert!(ttl_fresh(t0, t0 + Duration::from_secs(29), Duration::from_secs(30)));
+        assert!(!ttl_fresh(t0, t0 + Duration::from_secs(30), Duration::from_secs(30)));
+        assert!(!ttl_fresh(t0, t0 + Duration::from_secs(301), Duration::from_secs(300)));
+    }
+}

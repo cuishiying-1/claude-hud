@@ -27,7 +27,7 @@ impl Widget for ModelDisplay {
             ansi::ansi_reset())
     }
 
-    fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, _config: &WidgetConfig) {
+    fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, _config: &WidgetConfig) {
         let text = format!("Model: {} ({})", data.model.display_name, data.model.id);
         frame.render_widget(Text::from(text), area);
     }

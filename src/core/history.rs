@@ -16,9 +16,6 @@ pub struct SessionRecord {
     pub total_cost_usd: f64,
     pub total_tokens: u64,
     pub agent_count: usize,
-    pub lines_added: u64,
-    pub lines_removed: u64,
-    pub mod_used: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -86,7 +83,6 @@ impl HistoryStore {
         &self,
         data: &SessionData,
         agent_count: usize,
-        mod_name: &str,
     ) -> Result<(), String> {
         let dur_secs = data.cost.total_duration_ms / 1000;
         let total_tokens =
@@ -94,17 +90,9 @@ impl HistoryStore {
 
         self.conn
             .execute(
-                "INSERT INTO sessions (duration_secs, total_cost_usd, total_tokens, agent_count, lines_added, lines_removed, mod_used)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![
-                    dur_secs,
-                    data.cost.total_cost_usd,
-                    total_tokens,
-                    agent_count,
-                    data.cost.total_lines_added,
-                    data.cost.total_lines_removed,
-                    mod_name,
-                ],
+                "INSERT INTO sessions (duration_secs, total_cost_usd, total_tokens, agent_count)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![dur_secs, data.cost.total_cost_usd, total_tokens, agent_count],
             )
             .map_err(|e| format!("insert session: {}", e))?;
 
@@ -142,8 +130,7 @@ impl HistoryStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, started_at, duration_secs, total_cost_usd, total_tokens,
-                        agent_count, lines_added, lines_removed, mod_used
+                "SELECT id, started_at, duration_secs, total_cost_usd, total_tokens, agent_count
                  FROM sessions ORDER BY id DESC LIMIT ?1",
             )
             .map_err(|e| format!("prepare: {}", e))?;
@@ -157,9 +144,6 @@ impl HistoryStore {
                     total_cost_usd: row.get(3)?,
                     total_tokens: row.get::<_, i64>(4)? as u64,
                     agent_count: row.get::<_, i64>(5)? as usize,
-                    lines_added: row.get::<_, i64>(6)? as u64,
-                    lines_removed: row.get::<_, i64>(7)? as u64,
-                    mod_used: row.get(8)?,
                 })
             })
             .map_err(|e| format!("query: {}", e))?
@@ -242,8 +226,8 @@ mod tests {
     #[test]
     fn weekly_report_aggregates_five_metrics() {
         let store = mem_store();
-        store.record_session(&session(1.0, 1000, 500, 60_000), 1, "glacier").unwrap();
-        store.record_session(&session(3.5, 2000, 800, 3_600_000), 2, "glacier").unwrap();
+        store.record_session(&session(1.0, 1000, 500, 60_000), 1).unwrap();
+        store.record_session(&session(3.5, 2000, 800, 3_600_000), 2).unwrap();
         let r = store.weekly_report().unwrap();
         assert_eq!(r.sessions, 2);
         assert!((r.total_cost - 4.5).abs() < 1e-9);

@@ -71,16 +71,6 @@ pub trait Widget {
         config: &WidgetConfig,
     );
 
-    /// Minimum (width, height) in character cells for dashboard layout.
-    fn dashboard_size(&self) -> (u16, u16) {
-        (20, 3)
-    }
-
-    /// Whether this widget needs per-tick re-renders (animations).
-    fn needs_tick(&self) -> bool {
-        false
-    }
-
     /// Optional: receive transcript summary update (Phase 2).
     fn update_transcript(&self, _summary: &super::transcript::TranscriptSummary) {}
 }

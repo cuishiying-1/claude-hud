@@ -90,8 +90,6 @@ impl Widget for SkillsMcpDynamic {
         frame.render_widget(Paragraph::new(Text::from(lines)), area);
     }
 
-    fn dashboard_size(&self) -> (u16, u16) { (25, 5) }
-
     fn update_transcript(&self, summary: &TranscriptSummary) {
         if let Ok(ref mut guard) = self.summary.lock() {
             **guard = Some(summary.clone());

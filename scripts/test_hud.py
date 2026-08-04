@@ -203,6 +203,13 @@ def run_one(exe_path, case, tmp_dir):
         if os.path.isfile(db_path):
             os.remove(db_path)
 
+    # ⑨+：可选清空 state.json —— checkout_billed 去重表跨进程持久，
+    # 上一用例残留会挡本用例结账（必须在任何 checkout 渲染之前）。
+    if case.get("remove_state"):
+        state_path = os.path.join(runner.HUD_DIR, "state.json")
+        if os.path.isfile(state_path):
+            os.remove(state_path)
+
     # Fix 2: pre_cmd failures must not be silent — collect warnings and
     # surface them in the final detail.  A case may still PASS if its main
     # assertions hold; the warning is informational.

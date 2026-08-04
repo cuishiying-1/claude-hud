@@ -165,7 +165,7 @@ fn run_loop(
                     KeyCode::Char('q') | KeyCode::Esc => {
                         // Record session before exit
                         if let Some(ref h) = history {
-                            let _ = h.record_session(&data, last_agent_count, &config.active_mod);
+                            let _ = h.record_session(&data, last_agent_count);
                         }
                         return Ok(());
                     }

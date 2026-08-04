@@ -944,7 +944,7 @@ P4 = [
                     {"args": ["render"],
                      "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
                 ],
-                remove_db=True,
+                remove_db=True, remove_state=True,
                 note="⑨：render A（/a.jsonl）→ render B（/b.jsonl）切换时结账 A；history 输出 1 条 Recent session（#1）"),
     render_case("P4-02", "history 空库显示 —", "P4",
                 {"exit": 0, "stdout_contains": ["—"]},
@@ -1063,7 +1063,7 @@ P5 = [
                     {"args": ["render"],
                      "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
                 ],
-                remove_db=True,
+                remove_db=True, remove_state=True,
                 note="㉑：双 render 切换结账 1 条 → 五指标输出 1 sessions + top session；成本带 ≈"),
     render_case("P5-07", "history --weekly 空库 —", "P5",
                 {"exit": 0, "stdout_contains": ["Weekly report", "—"]},
@@ -1073,8 +1073,56 @@ P5 = [
     serve_case("P5-06", "/api/data 含 trend 字段", "/api/data", 200, "application/json",
                expect_json=True, expect_json_fields=["trend", "pricing_configured"],
                note="㉑：趋势字段（空库 available:false）+ ⑲ pricing_configured 存在性"),
+    render_case("P5-09", "结账振荡 A→B→A→B 冷却去重", "P5",
+                {"exit": 0, "stdout_contains": ["Sessions: 2", "#2"],
+                 "stdout_not_contains": ["#3"]},
+                args=["history"], config=DEFAULT_CONFIG,
+                pre_cmds=[
+                    {"args": ["render"],
+                     "stdin": j(full_dict(**{"transcript_path": "/a.jsonl"}))},
+                    {"args": ["render"],
+                     "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+                    {"args": ["render"],
+                     "stdin": j(full_dict(**{"transcript_path": "/a.jsonl"}))},
+                    {"args": ["render"],
+                     "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+                ],
+                remove_db=True, remove_state=True,
+                note="⑨+：4 次 render 振荡切换只结账 2 条（冷却期内同 path 跳过）→ Sessions: 2 且无 #3"),
+    render_case("P5-10", "[budget] 状态栏占比显示", "P5",
+                {"exit": 0, "stdout_contains": ["· 62%", "≈$3.10"]},
+                stdin=j(full_dict(**{"cost.total_cost_usd": 0.034,
+                                     "context_window.total_input_tokens": 3100,
+                                     "context_window.total_output_tokens": 0})),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"cost_display\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"
+                    "[budget]\ncap_usd = 5.0\n"
+                    "[pricing]\n"
+                    "\"deepseek-v4-flash\" = { input = 0.001, output = 0.002 }\n"),
+                note="⑳：3100 tok × 0.001 = 3.10 ≈（实时路径）→ cap 5.0 → 组尾 · 62%"),
+    render_case("P5-11", "无 [budget] 占比隐藏", "P5",
+                {"exit": 0, "stdout_contains": ["≈$3.10"],
+                 "stdout_not_contains": ["· %"]},
+                stdin=j(full_dict(**{"cost.total_cost_usd": 0.034,
+                                     "context_window.total_input_tokens": 3100,
+                                     "context_window.total_output_tokens": 0})),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"cost_display\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"
+                    "[pricing]\n"
+                    "\"deepseek-v4-flash\" = { input = 0.001, output = 0.002 }\n"),
+                note="⑳：cap_usd 默认 0 → 占比隐藏（成本组照常 ≈$3.10）"),
 ]
 
 
 CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5
-assert len(CASES) == 138, f"expected 138 cases, got {len(CASES)}"
+assert len(CASES) == 141, f"expected 141 cases, got {len(CASES)}"

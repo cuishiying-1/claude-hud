@@ -102,10 +102,6 @@ pub struct TokenTotal {
 pub enum TranscriptEntry {
     #[serde(rename = "tool_use")]
     ToolUse(ToolUseEntry),
-    #[serde(rename = "tool_result")]
-    ToolResult(ToolResultEntry),
-    #[serde(rename = "user")]
-    UserEntry(UserEntry),
     #[serde(rename = "assistant")]
     AssistantEntry(AssistantEntry),
     #[serde(rename = "compact_boundary")]
@@ -151,18 +147,6 @@ pub struct ToolUseEntry {
     pub input: serde_json::Value,
     #[serde(default)]
     pub timestamp: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ToolResultEntry {
-    #[serde(default)]
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct UserEntry {
-    #[serde(default)]
-    pub message: Option<MessageContent>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -219,6 +203,17 @@ pub struct TranscriptReader {
     token_timeline: Vec<TokenSnapshot>,
 }
 
+/// 时间线分桶上限：360 桶 × 60s = 6h 滚动窗口（压缩预测只读首尾桶，足够）。
+const MAX_TIMELINE_BUCKETS: usize = 360;
+
+/// 裁剪时间线到最近 6h（push 后与 to_state 序列化前调用，恢复旧状态立即封顶）。
+fn cap_timeline(timeline: &mut Vec<TokenSnapshot>) {
+    let overflow = timeline.len().saturating_sub(MAX_TIMELINE_BUCKETS);
+    if overflow > 0 {
+        timeline.drain(0..overflow);
+    }
+}
+
 impl TranscriptReader {
     pub fn new(path: PathBuf) -> Self {
         Self {
@@ -263,6 +258,8 @@ impl TranscriptReader {
     pub fn to_state(&self) -> TranscriptSegment {
         let mut agents: Vec<AgentRecord> = self.agents.values().cloned().collect();
         agents.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut token_timeline = self.token_timeline.clone();
+        cap_timeline(&mut token_timeline);
         TranscriptSegment {
             path: self.path.to_string_lossy().into_owned(),
             last_pos: self.last_pos,
@@ -271,7 +268,7 @@ impl TranscriptReader {
             mcp_calls: self.mcps.values().cloned().collect(),
             tool_counts: self.tool_counts.clone(),
             total_tokens: self.total_tokens.clone(),
-            token_timeline: self.token_timeline.clone(),
+            token_timeline,
             timestamps_reliable: self.timestamps_reliable,
             last_event_secs: self.last_event_secs,
         }
@@ -449,6 +446,7 @@ impl TranscriptReader {
                             Some(last) if last.timestamp_secs == bucket => *last = snapshot,
                             _ => self.token_timeline.push(snapshot),
                         }
+                        cap_timeline(&mut self.token_timeline);
                     }
                     _ => {}
                 }
@@ -618,6 +616,39 @@ mod tests {
         let seg2 = c.to_state();
         let mut d = TranscriptReader::from_state(&seg2);
         assert!(!d.read_updates().timestamps_reliable);
+    }
+
+    #[test]
+    fn timeline_caps_at_360_buckets() {
+        let mut timeline: Vec<TokenSnapshot> = (0..400u64)
+            .map(|i| TokenSnapshot {
+                timestamp_secs: i * 60,
+                input_tokens: 0,
+                output_tokens: 0,
+                total_tokens: i,
+            })
+            .collect();
+        cap_timeline(&mut timeline);
+        assert_eq!(timeline.len(), 360);
+        assert_eq!(timeline[0].timestamp_secs, 40 * 60);
+        assert_eq!(timeline[359].timestamp_secs, 399 * 60);
+    }
+
+    #[test]
+    fn timeline_cap_keeps_prediction_window() {
+        let mut reader = TranscriptReader::new(PathBuf::new());
+        for i in 0..400u64 {
+            reader.token_timeline.push(TokenSnapshot {
+                timestamp_secs: i * 60,
+                input_tokens: 0,
+                output_tokens: 0,
+                total_tokens: i * 10,
+            });
+        }
+        reader.timestamps_reliable = true;
+        cap_timeline(&mut reader.token_timeline);
+        let summary = reader.cumulative_summary();
+        assert!(summary.compaction_prediction(50.0, 200_000).is_some());
     }
 
     #[test]

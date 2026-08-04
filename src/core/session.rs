@@ -115,10 +115,6 @@ pub struct SubagentStatusLine {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubagentInfo {
-    pub name: String,
-    pub model: String,
-    #[serde(default)]
-    pub task: String,
     #[serde(default)]
     pub elapsed_secs: u64,
     #[serde(default)]
@@ -169,7 +165,8 @@ mod tests {
         assert_eq!(data.rate_limits.five_hour.used_percentage, 12.5);
         assert_eq!(data.rate_limits.seven_day.used_percentage, 3.0);
         let agents = data.subagent_status_line.expect("camelCase alias parsed");
-        assert_eq!(agents.agents[0].name, "a");
+        assert_eq!(agents.agents.len(), 1);
+        assert!(!agents.agents[0].is_active);
     }
 
     #[test]

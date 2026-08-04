@@ -221,18 +221,6 @@ impl Theme {
         Some((r, g, b))
     }
 
-    /// Interpolate between start and end colors by t (0.0 to 1.0).
-    pub fn interpolate_hex(start: &str, end: &str, t: f64) -> Option<(u8, u8, u8)> {
-        let (sr, sg, sb) = Self::parse_hex(start)?;
-        let (er, eg, eb) = Self::parse_hex(end)?;
-        let t = t.clamp(0.0, 1.0);
-        Some((
-            (sr as f64 + (er as f64 - sr as f64) * t) as u8,
-            (sg as f64 + (eg as f64 - sg as f64) * t) as u8,
-            (sb as f64 + (eb as f64 - sb as f64) * t) as u8,
-        ))
-    }
-
     /// Resolve Auto to a concrete set using the real font probe.
     pub fn resolve_icon_set(&self) -> IconSet {
         self.resolve_icon_set_with(detect_nerd_font())

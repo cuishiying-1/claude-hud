@@ -45,7 +45,7 @@ impl AgentDetail {
     pub fn new() -> Self {
         Self {
             summary: Mutex::new(None),
-            anim: Mutex::new(AnimationState::new(true)),
+            anim: Mutex::new(AnimationState::new()),
         }
     }
 }
@@ -161,10 +161,6 @@ impl Widget for AgentDetail {
 
         frame.render_widget(Paragraph::new(Text::from(lines)), area);
     }
-
-    fn needs_tick(&self) -> bool { true }
-
-    fn dashboard_size(&self) -> (u16, u16) { (30, 6) }
 
     fn update_transcript(&self, summary: &TranscriptSummary) {
         if let Ok(ref mut guard) = self.summary.lock() {

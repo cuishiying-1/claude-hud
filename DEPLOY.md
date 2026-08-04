@@ -136,6 +136,7 @@ Daily cost (last 7 days):
 - 判定发生在 render 进程（每 5s 管线），**不开 dashboard 也能收到预警**。
 - dashboard 不接预算：其 transcript 精确成本与预算的 `≈` 实时语义冲突。
 - 与 `[alerts].cost_threshold_usd` 并存互不干扰，先到者先发。
+- **状态栏占比（v0.3）**：配置了 `cap_usd` 且成本 > 0 时，cost_display 组尾追加 ` · NN%`（实时成本 ÷ cap）；`cap_usd = 0`（默认关闭）时占比隐藏。
 
 ### 状态栏宽度
 
@@ -202,6 +203,7 @@ stall_threshold_sec = "30"
 [budget]
 cap_usd = 5.0              # 会话成本上限（0 = 关闭预算，默认关闭）
 warn_pcts = [50, 80, 100]  # 达到这些百分比时通知，每档一次（单调递进）
+                           # cap > 0 时状态栏 cost_display 组尾显示占比（如 · 62%）
 
 # 临时覆盖（不修改 Mod 本身）
 [runtime_overrides]
