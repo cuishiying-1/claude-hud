@@ -1,0 +1,4 @@
+active_mod = ""
+preset = "full"
+separator = " │ "
+compact_layout = ["model_display", "no_such_widget", "context_bar"]

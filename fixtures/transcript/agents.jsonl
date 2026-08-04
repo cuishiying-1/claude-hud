@@ -1,0 +1,8 @@
+{"type":"tool_use","name":"Bash","input":{"command":"ls"},"timestamp":"2026-07-31T10:01:00Z"}
+{"type":"tool_use","name":"Skill","input":{"skill":"explore"}}
+{"type":"tool_result","name":"Bash"}
+{"type":"subagent_start","name":"explorer-1","model":"deepseek-v4-flash","task":"search"}
+{"type":"subagent_start","name":"reviewer-1","model":"deepseek-v4-pro[1m]","task":"review"}
+{"type":"subagent_stop","name":"explorer-1"}
+{"type":"subagent_stop","name":"reviewer-1"}
+{"type":"assistant","message":{"usage":{"input_tokens":500,"output_tokens":250}}}

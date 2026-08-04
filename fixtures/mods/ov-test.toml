@@ -1,0 +1,20 @@
+[mod_info]
+name = "ov-test"
+version = "1.0.0"
+description = "theme override chain test: mod overrides must beat config keys"
+scene = "test"
+
+[layout]
+compact = "minimal"
+dashboard = "grid-2x2"
+compact_lines = 1
+
+[theme]
+preset = "nord"
+
+[theme.overrides]
+model_color = "#333333"
+
+[animation]
+enabled = true
+effects = []

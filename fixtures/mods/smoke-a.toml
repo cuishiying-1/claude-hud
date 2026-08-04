@@ -1,0 +1,17 @@
+[mod_info]
+name = "smoke-a"
+version = "1.0.0"
+description = "harness smoke mod A"
+scene = "test"
+
+[layout]
+compact = "model_display, context_bar"
+dashboard = "grid-2x2"
+compact_lines = 1
+
+[theme]
+preset = "nord"
+
+[animation]
+enabled = true
+effects = []

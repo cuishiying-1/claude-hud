@@ -1,0 +1,6 @@
+{"type":"subagent_start","name":"alpha","model":"deepseek-v4-flash","task":"search","timestamp":"2026-07-31T10:01:00Z"}
+{"type":"tool_use","name":"Bash","input":{},"timestamp":"2026-07-31T10:01:30Z"}
+{"type":"tool_use","name":"Read","input":{},"timestamp":"2026-07-31T10:02:00Z"}
+{"type":"subagent_stop","name":"alpha","timestamp":"2026-07-31T10:02:30Z"}
+{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50}},"timestamp":"2026-07-31T10:03:00Z"}
+{"type":"assistant","message":{"usage":{"input_tokens":200,"output_tokens":80}},"timestamp":"2026-07-31T10:04:00Z"}

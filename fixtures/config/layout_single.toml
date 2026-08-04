@@ -1,0 +1,7 @@
+active_mod = ""
+preset = "full"
+separator = " │ "
+compact_layout = ["model_display"]
+
+[runtime_overrides]
+compact_lines = 1

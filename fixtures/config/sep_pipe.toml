@@ -1,0 +1,4 @@
+active_mod = ""
+preset = "full"
+separator = "|"
+compact_layout = ["model_display", "context_bar", "cost_display"]

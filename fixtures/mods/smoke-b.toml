@@ -1,0 +1,13 @@
+[mod_info]
+name = "smoke-b"
+version = "1.0.0"
+description = "harness smoke mod B"
+scene = "test"
+
+[layout]
+compact = "cost_display, skills_mcp"
+dashboard = "grid-2x2"
+compact_lines = 1
+
+[theme]
+preset = "ember-night"

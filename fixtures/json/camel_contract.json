@@ -1,0 +1,13 @@
+{
+  "model": {"id": "deepseek-v4-flash", "display_name": "deepseek-v4-flash"},
+  "context_window": {"context_window_size": 200000, "used_percentage": 30,
+                     "total_input_tokens": 6800, "total_output_tokens": 5000,
+                     "current_usage": {"input_tokens": 6800, "output_tokens": 5000,
+                                       "cache_creation_input_tokens": 0,
+                                       "cache_read_input_tokens": 100}},
+  "cost": {"total_cost_usd": 0.034, "total_duration_ms": 12000},
+  "rate_limits": {"five_hour_pct": 12, "seven_day_pct": 0},
+  "subagentStatusLine": {"agents": [{"name": "probe", "model": "deepseek-v4-flash",
+                                     "task": "search", "elapsed_secs": 5,
+                                     "is_active": true}]}
+}

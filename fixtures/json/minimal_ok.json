@@ -1,0 +1,1 @@
+{"model":{"id":"m","display_name":"mini-model"},"cost":{"total_cost_usd":0.5,"total_duration_ms":100},"context_window":{"context_window_size":200000,"used_percentage":12.5,"total_input_tokens":25000}}

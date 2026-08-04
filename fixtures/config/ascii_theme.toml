@@ -1,0 +1,24 @@
+active_mod = ""
+preset = "full"
+separator = " │ "
+compact_layout = ["model_display", "skills_mcp"]
+
+[theme]
+bg = "#000000"
+fg = "#ffffff"
+accent = "#ff0000"
+success = "#00ff00"
+warning = "#ffff00"
+danger = "#ff00ff"
+muted = "#888888"
+border = "#444444"
+skill_color = "#00ffff"
+mcp_color = "#ff8000"
+model_color = "#ff0000"
+bar_filled = "#"
+bar_empty = "."
+icon_set = "ascii"
+bar_width = 10
+padding = 0
+compact_lines = 1
+dashboard_grid = 2
