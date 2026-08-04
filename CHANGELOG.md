@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - 安装使用流程简化：一键安装/卸载脚本、`setup` 自动合并、`uninstall`/`doctor` 子命令、`icon_set = "auto"` 零依赖字体决议
+- 国际化：自研轻量 i18n 框架（`language = "en" | "zh"` 配置键 + locales/en|zh.toml 字符串表 + 回退链）；覆盖运行时输出 / clap 帮助 / Web 仪表盘三面；`CLAUDE_HUD_CONFIG` env 测试注入
 
 ## [0.6.0] - 2026-08-04 (v0.4 视觉批次)
 

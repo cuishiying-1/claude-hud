@@ -90,17 +90,18 @@ pub fn send_notifications(
     cfg: &AlertsConfig,
     symbol: &str,
     effective_cost: f64,
+    lang: crate::core::i18n::Language,
 ) {
     for kind in fired {
         match kind {
             AlertKind::ContextCritical => {
-                crate::notify::context_critical(data.context_window.used_percentage)
+                crate::notify::context_critical(data.context_window.used_percentage, lang)
             }
             AlertKind::CostThreshold => {
-                crate::notify::cost_threshold(effective_cost, cfg.cost_threshold_usd, symbol)
+                crate::notify::cost_threshold(effective_cost, cfg.cost_threshold_usd, symbol, lang)
             }
             AlertKind::RateLimit => {
-                crate::notify::rate_limit_warning(data.rate_limits.five_hour.used_percentage)
+                crate::notify::rate_limit_warning(data.rate_limits.five_hour.used_percentage, lang)
             }
             AlertKind::Budget => {}
         }

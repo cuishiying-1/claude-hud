@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::transcript::TranscriptSummary;
@@ -27,7 +28,7 @@ impl Widget for SessionStats {
 
     fn display_name(&self) -> &str { "Session Stats" }
 
-    fn render_compact(&self, data: &SessionData, theme: &Theme, _config: &WidgetConfig) -> String {
+    fn render_compact(&self, data: &SessionData, theme: &Theme, config: &WidgetConfig) -> String {
         let dur_secs = data.cost.total_duration_ms / 1000;
         let mins = dur_secs / 60;
         let secs = dur_secs % 60;
@@ -42,10 +43,10 @@ impl Widget for SessionStats {
         format!("{} {} {}",
             ansi::ansi_fg(&format!("⏱{}", dur_str), &theme.fg),
             ansi::ansi_fg(&format!("{}tok/s", tok_per_sec), &theme.accent),
-            ansi::ansi_fg(&format!("{}calls", total_tool_calls), &theme.muted))
+            ansi::ansi_fg(&format!("{}{}", total_tool_calls, tr(config.lang, "runtime.calls")), &theme.muted))
     }
 
-    fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, _config: &WidgetConfig) {
+    fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, config: &WidgetConfig) {
         let dur_secs = data.cost.total_duration_ms / 1000;
         let tool_calls = self.summary.lock().ok().as_ref()
             .and_then(|g| g.as_ref())
@@ -53,15 +54,27 @@ impl Widget for SessionStats {
             .unwrap_or(0);
         let mut lines = vec![
             Line::from(Span::styled("Session Stats", Style::default().fg(ansi::parse_ratatui_color(&theme.accent)))),
-            Line::from(format!("Duration: {}m {}s | Lines: +{}/-{} | Tools: {}", dur_secs / 60, dur_secs % 60, data.cost.total_lines_added, data.cost.total_lines_removed, tool_calls)),
+            Line::from(format!("{}: {}m {}s | {}: +{}/-{} | {}: {}",
+                tr(config.lang, "runtime.duration"),
+                dur_secs / 60,
+                dur_secs % 60,
+                tr(config.lang, "runtime.lines"),
+                data.cost.total_lines_added,
+                data.cost.total_lines_removed,
+                tr(config.lang, "runtime.tools"),
+                tool_calls)),
         ];
         if let Ok(ref guard) = self.summary.lock() {
             if let Some(ref s) = **guard {
                 let mut tools: Vec<(&String, &usize)> = s.tool_counts.iter().collect();
                 tools.sort_by(|a, b| b.1.cmp(a.1));
-                lines.push(Line::from("Top tools:"));
+                lines.push(Line::from(format!("{}:", tr(config.lang, "runtime.top_tools"))));
                 for (name, count) in tools.iter().take(5) {
-                    lines.push(Line::from(format!("  {} ({} calls)", name, count)));
+                    lines.push(Line::from(
+                        tr(config.lang, "runtime.tool_calls")
+                            .replace("{name}", name)
+                            .replace("{count}", &count.to_string()),
+                    ));
                 }
             }
         }

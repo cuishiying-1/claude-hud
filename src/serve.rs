@@ -4,6 +4,7 @@ use tiny_http::{Response, Server};
 
 use crate::core::config::AppConfig;
 use crate::core::history::HistoryStore;
+use crate::core::i18n::tr;
 use crate::core::state;
 use crate::core::theme::Theme;
 use crate::core::widget::WidgetRegistry;
@@ -43,9 +44,13 @@ pub fn run(
     let addr = format!("127.0.0.1:{}", PORT);
     let server =
         Server::http(&addr).map_err(|e| format!("start server on {}: {}", addr, e))?;
+    let lang = config.language();
 
-    println!("Web dashboard: http://localhost:{}", PORT);
-    println!("Press Ctrl+C to stop");
+    println!(
+        "{}",
+        tr(lang, "runtime.serve_start").replace("{port}", &PORT.to_string())
+    );
+    println!("{}", tr(lang, "runtime.serve_stop"));
 
     for request in server.incoming_requests() {
         let url = request.url().to_string();
@@ -70,7 +75,9 @@ pub fn run(
                 let _ = request.respond(Response::from_string("OK"));
             }
             _ => {
-                let _ = request.respond(Response::from_string("Not Found").with_status_code(404));
+                let body = Response::from_string(tr(lang, "web.not_found"))
+                    .with_status_code(404);
+                let _ = request.respond(body);
             }
         }
     }
@@ -152,15 +159,15 @@ fn trend_json_inner() -> String {
 
 fn build_dashboard_html(
     _registry: &WidgetRegistry,
-    _config: &AppConfig,
+    config: &AppConfig,
     _theme: &Theme,
 ) -> String {
-    r#"<!DOCTYPE html>
-<html lang="en">
+    let html = r#"<!DOCTYPE html>
+<html lang="{web_lang}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude HUD — Dashboard</title>
+<title>{web_title}</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -223,49 +230,50 @@ fn build_dashboard_html(
 </head>
 <body>
 <div class="header">
-  <h1>Claude HUD Dashboard</h1>
+  <h1>{web_heading}</h1>
   <div class="status">● Live · <span id="update-time">--</span></div>
 </div>
 
 <div id="pricing-note" style="display:none;color:#d29922;font-size:11px;margin-bottom:12px;"></div>
 <div class="grid" id="dashboard-grid">
   <div class="card">
-    <div class="card-title">Model</div>
+    <div class="card-title">{web_model}</div>
     <div class="card-value" id="val-model">--</div>
   </div>
   <div class="card">
-    <div class="card-title">Context Window</div>
+    <div class="card-title">{web_ctx_window}</div>
     <div class="metric-big" id="val-ctx">--</div>
-    <div class="metric-label">used</div>
+    <div class="metric-label">{web_used}</div>
     <div class="bar"><div class="bar-fill" id="bar-ctx" style="width:0%;background:linear-gradient(90deg,#7ee787,#f0883e,#ff7b72);"></div></div>
   </div>
   <div class="card">
-    <div class="card-title">Session Cost</div>
+    <div class="card-title">{web_session_cost}</div>
     <div class="metric-big" id="val-cost">--</div>
-    <div class="metric-label">USD</div>
+    <div class="metric-label">{web_usd}</div>
   </div>
   <div class="card">
-    <div class="card-title">Duration</div>
+    <div class="card-title">{web_duration}</div>
     <div class="metric-big" id="val-dur">--</div>
-    <div class="metric-label">active</div>
+    <div class="metric-label">{web_active}</div>
   </div>
   <div class="card">
-    <div class="card-title">This Week</div>
+    <div class="card-title">{web_this_week}</div>
     <div class="metric-big" id="val-week-cost">--</div>
-    <div class="metric-label"><span id="val-week-sessions">--</span> sessions</div>
+    <div class="metric-label"><span id="val-week-sessions">--</span> {web_sessions}</div>
   </div>
 </div>
 
   <div class="card" id="trend-card" style="display:none;">
-    <div class="card-title">Weekly cost trend</div>
+    <div class="card-title">{web_cost_trend}</div>
     <div id="trend-bars" style="display:flex;align-items:flex-end;gap:6px;height:64px;margin-top:8px;"></div>
   </div>
 
 <div id="widgets-area" style="margin-top:24px;"></div>
 
-<div class="realtime">Refreshing every 2s · http://localhost:9527</div>
+<div class="realtime">{web_realtime}</div>
 
 <script>
+const T = {pricing_note: "T_PRICING_NOTE", not_found: "T_NOT_FOUND"};
 async function refresh() {
   try {
     const resp = await fetch('/api/data');
@@ -289,7 +297,7 @@ async function refresh() {
     if (data.pricing_configured) {
       note.style.display = 'none';
     } else {
-      note.textContent = '当前模型未配置单价 (model.id: ' + data.model_id + ') — 状态栏成本为官方透传值';
+      note.textContent = T.pricing_note.replace('{id}', data.model_id);
       note.style.display = 'block';
     }
     const trend = data.trend || {};
@@ -332,13 +340,34 @@ refresh();
 setInterval(refresh, 2000);
 </script>
 </body>
-</html>"#.to_string()
+</html>"#;
+    let lang = config.language();
+    html.replace("{web_title}", tr(lang, "web.title"))
+        .replace("{web_lang}", config.language().code())
+        .replace("{web_heading}", tr(lang, "web.heading"))
+        .replace("{web_model}", tr(lang, "web.model"))
+        .replace("{web_ctx_window}", tr(lang, "web.ctx_window"))
+        .replace("{web_used}", tr(lang, "web.used"))
+        .replace("{web_session_cost}", tr(lang, "web.session_cost"))
+        .replace("{web_usd}", tr(lang, "web.usd"))
+        .replace("{web_duration}", tr(lang, "web.duration"))
+        .replace("{web_active}", tr(lang, "web.active"))
+        .replace("{web_this_week}", tr(lang, "web.this_week"))
+        .replace("{web_sessions}", tr(lang, "web.sessions"))
+        .replace("{web_cost_trend}", tr(lang, "web.cost_trend"))
+        .replace("{web_realtime}", tr(lang, "web.realtime"))
+        .replace("T_PRICING_NOTE", tr(lang, "web.pricing_note"))
+        .replace("T_NOT_FOUND", tr(lang, "web.not_found"))
 }
 
 
 #[cfg(test)]
 mod tests {
+    use super::build_dashboard_html;
     use super::ttl_fresh;
+    use crate::core::config::AppConfig;
+    use crate::core::theme::Theme;
+    use crate::core::widget::WidgetRegistry;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -347,5 +376,27 @@ mod tests {
         assert!(ttl_fresh(t0, t0 + Duration::from_secs(29), Duration::from_secs(30)));
         assert!(!ttl_fresh(t0, t0 + Duration::from_secs(30), Duration::from_secs(30)));
         assert!(!ttl_fresh(t0, t0 + Duration::from_secs(301), Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn dashboard_html_respects_language() {
+        let cfg_zh: AppConfig = toml::from_str("language = \"zh\"\n").unwrap();
+        let html_zh = build_dashboard_html(
+            &WidgetRegistry::new(),
+            &cfg_zh,
+            &Theme::default(),
+        );
+        assert!(html_zh.contains("仪表盘"));
+        assert!(html_zh.contains("模型"));
+        let html_en = build_dashboard_html(
+            &WidgetRegistry::new(),
+            &AppConfig::default(),
+            &Theme::default(),
+        );
+        assert!(html_en.contains("Claude HUD Dashboard"));
+        assert!(html_en.contains("Model"));
+        // 标记全部被替换（无残留 {web_）
+        assert!(!html_en.contains("{web_"));
+        assert!(!html_zh.contains("{web_"));
     }
 }

@@ -974,10 +974,10 @@ P4 = [
                 config=DEFAULT_CONFIG,
                 config_file_contains=["[theme]", "accent = \"#ff00ff\""],
                 note="⑰：theme import 追加提示且落盘行为不变（复用 P3-06 流程）"),
-    render_case("P4-03", "update check 占位符短路", "P4",
-                {"exit": 0, "stdout_contains": ["not published yet"]},
+    render_case("P4-03", "update check 状态输出", "P4",
+                {"exit": 0, "stdout_regex": r"(not published yet|update check unavailable|up to date|update available)"},
                 args=["update", "check"], config=DEFAULT_CONFIG,
-                note="⑱：占位符仓库零网络返回 NotPublished（exit 0 恒定）"),
+                note="⑱：真实仓库后走网络，输出为四态之一（exit 0 恒定；网络/有无 release 均确定性）"),
 ]
 
 # --- v0.2（⑲⑳㉑ 成本哨兵批次）---
@@ -1201,5 +1201,39 @@ P5 = [
 ]
 
 
-CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5
-assert len(CASES) == 147, f"expected 147 cases, got {len(CASES)}"
+# --- v0.5（i18n 批次）---
+# CLAUDE_HUD_CONFIG env 覆盖 config_path()（单测：config_path_env_override）
+P6 = [
+render_case("P6-01", "zh 语言：history 中文表头", "P6",
+            {"exit": 0, "stdout_contains": ["每周统计：", "近期会话：",
+                                             "每日成本（最近 7 天）：", "成本：—"]},
+            args=["history"], remove_db=True,
+            env_extra={"CLAUDE_HUD_CONFIG": fx("config/i18n_zh.toml")},
+            config=None,
+            note="i18n：language=zh 时历史输出中文表头 + 空库行（env 注入临时 config）"),
+render_case("P6-02", "zh 语言：doctor 中文行", "P6",
+            {"exit": 0, "stdout_contains": ["所有检查通过。", "二进制"]},
+            args=["doctor"], config=DEFAULT_CONFIG,
+            env_extra={"CLAUDE_HUD_CONFIG": fx("config/i18n_zh.toml")},
+            note="i18n：doctor 输出中文"),
+render_case("P6-03", "非法 language 回退 en + 警告", "P6",
+            {"exit": 0, "stdout_contains": ["Weekly stats:"],
+             "stderr_contains": ["invalid language 'xx', falling back to en"]},
+            args=["history"], config=DEFAULT_CONFIG,
+            env_extra={"CLAUDE_HUD_CONFIG": fx("config/i18n_bad.toml")},
+            note="i18n：非法值 stderr 警告 + 英文回退"),
+render_case("P6-04", "zh 语言：update check 中文", "P6",
+            {"exit": 0, "stdout_regex": r"(尚未发布|已是最新|有新版本|更新检查不可用)"},
+            args=["update", "check"], config=DEFAULT_CONFIG,
+            env_extra={"CLAUDE_HUD_CONFIG": fx("config/i18n_zh.toml")},
+            note="i18n：update 四态中文（网络无关确定性；正则按 zh 文案\"有新版本\"）"),
+render_case("P6-05", "zh 语言：mod preview 中文行", "P6",
+            {"exit": 0, "stdout_contains": ["预览：", "场景：", "布局：", "主题：", "动画："]},
+            args=["mod", "preview", "glacier-workstation"], config=None,
+            env_extra={"CLAUDE_HUD_CONFIG": fx("config/i18n_zh.toml")},
+            note="i18n：mod preview 布局/动画行中文（补齐 T6 遗漏行）"),
+]
+
+CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6
+# 147 + 5（P6-01..05）= 152（与计划数字一致）
+assert len(CASES) == 152, f"expected 152 cases, got {len(CASES)}"

@@ -8,6 +8,7 @@ use ratatui::Frame;
 
 use crate::core::ansi;
 use crate::core::animation;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::transcript::TranscriptSummary;
@@ -146,10 +147,10 @@ impl Widget for AgentDetail {
                     lines.push(line);
                 }
             } else {
-                lines.push(Line::from("No agent data (transcript not parsed)"));
+                lines.push(Line::from(tr(config.lang, "runtime.no_agent_data")));
             }
         } else {
-            lines.push(Line::from("No agent data (transcript not parsed)"));
+            lines.push(Line::from(tr(config.lang, "runtime.no_agent_data")));
         }
 
         frame.render_widget(Paragraph::new(Text::from(lines)), area);

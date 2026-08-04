@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::transcript::TranscriptSummary;
@@ -27,20 +28,20 @@ impl Widget for TokenAttribution {
 
     fn display_name(&self) -> &str { "Token Attribution" }
 
-    fn render_compact(&self, _data: &SessionData, theme: &Theme, _config: &WidgetConfig) -> String {
+    fn render_compact(&self, _data: &SessionData, theme: &Theme, config: &WidgetConfig) -> String {
         if let Ok(ref guard) = self.summary.lock() {
             if let Some(ref summary) = **guard {
                 let attr = summary.token_attribution();
                 if let Some((top_agent, pct)) = attr.first() {
                     return format!("{}",
-                        ansi::ansi_fg(&format!("top:{} {:.0}%", top_agent.name, pct), &theme.accent));
+                        ansi::ansi_fg(&format!("{}:{} {:.0}%", tr(config.lang, "runtime.top_pct"), top_agent.name, pct), &theme.accent));
                 }
             }
         }
         String::new()
     }
 
-    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, _config: &WidgetConfig) {
+    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, config: &WidgetConfig) {
         let mut lines: Vec<Line> = vec![];
         lines.push(Line::from(Span::styled("Token Attribution",
             Style::default().fg(ansi::parse_ratatui_color(&theme.accent)))));
@@ -65,7 +66,7 @@ impl Widget for TokenAttribution {
                 return;
             }
         }
-        lines.push(Line::from("No token data (transcript not parsed)"));
+        lines.push(Line::from(tr(config.lang, "runtime.no_token_data")));
         frame.render_widget(Paragraph::new(Text::from(lines)), area);
     }
 

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::alert;
 use crate::core::ansi;
 use crate::core::config::AppConfig;
+use crate::core::i18n::{tr, Language};
 use crate::core::history::HistoryStore;
 use crate::core::pricing;
 use crate::core::session::SessionData;
@@ -27,6 +28,7 @@ pub const ACTIVITY_WIDGETS: [&str; 7] = [
 pub fn layout_from_mod(
     compact_widgets: Option<&Vec<String>>,
     layout_compact: &str,
+    lang: Language,
 ) -> Result<Vec<String>, String> {
     if let Some(widgets) = compact_widgets {
         return Ok(widgets.clone());
@@ -34,7 +36,14 @@ pub fn layout_from_mod(
     let ids: &[&str] = match layout_compact {
         "minimal" => &MINIMAL_WIDGETS,
         "activity" => &ACTIVITY_WIDGETS,
-        other => return Err(format!("compact layout '{}' not implemented", other)),
+        other => {
+            return Err(format!(
+                "{} '{}' {}",
+                tr(lang, "runtime.layout_not_impl"),
+                other,
+                tr(lang, "runtime.not_implemented")
+            ))
+        }
     };
     Ok(ids.iter().map(|s| s.to_string()).collect())
 }
@@ -51,6 +60,7 @@ pub fn resolve_compact_layout(config: &AppConfig) -> Result<Vec<String>, String>
             return layout_from_mod(
                 pkg.compact_widgets.as_ref(),
                 pkg.layout.as_ref().map(|l| l.compact.as_str()).unwrap_or(""),
+                config.language(),
             );
         }
     }
@@ -119,6 +129,7 @@ fn run_pipeline(
         &config.alerts,
         &config.currency_symbol,
         effective_cost,
+        config.language(),
     );
     // ⑳ 预算档位：基于实时估算成本（≈），档位单调 + 冷却跨进程去重。
     // 复用上方 realtime_cost 结果（effective_cost），不重复计算。
@@ -136,6 +147,7 @@ fn run_pipeline(
             (effective_cost / config.budget.cap_usd) * 100.0,
             config.budget.cap_usd,
             &config.currency_symbol,
+            config.language(),
         );
     }
     state.alerts = cooldown.to_state();
@@ -242,9 +254,9 @@ pub fn should_checkout(
 
 /// Build the stdout error marker for render failures. The message is
 /// truncated so the marker stays readable in a terminal status line.
-pub fn hud_err_marker(msg: &str) -> String {
+pub fn hud_err_marker(msg: &str, lang: Language) -> String {
     let short: String = msg.chars().take(80).collect();
-    format!("[hud err] {} — run 'claude-hud doctor'", short)
+    format!("[hud err] {} {}", short, tr(lang, "runtime.doctor_hint"))
 }
 
 /// Render the compact status bar from an already-parsed session snapshot.
@@ -323,7 +335,7 @@ fn read_stdin() -> Result<String, String> {
 /// 调试输出：原始 stdin JSON + 顶层键分类（recognized = SessionData
 /// 已知字段含 camelCase alias / unknown = 其余）。解析失败走 render
 /// 的错误路径（[hud err] + last_error，行为与 render 一致）。
-pub fn dump_stdin() -> Result<(), String> {
+pub fn dump_stdin(lang: Language) -> Result<(), String> {
     let stdin_data = read_stdin()?;
     let value: serde_json::Value = serde_json::from_str(&stdin_data)
         .map_err(|e| format!("parse stdin JSON: {}", e))?;
@@ -343,16 +355,17 @@ pub fn dump_stdin() -> Result<(), String> {
         }
     }
     unknown.sort();
-    println!("recognized: {}", recognized.join(", "));
+    println!("{}: {}", tr(lang, "runtime.recognized"), recognized.join(", "));
     println!(
-        "unknown: {}",
+        "{}: {}",
+        tr(lang, "runtime.unknown"),
         if unknown.is_empty() {
-            "(none)".to_string()
+            tr(lang, "runtime.none").to_string()
         } else {
             unknown.join(", ")
         }
     );
-    println!("--- raw stdin ---");
+    println!("{}", tr(lang, "runtime.raw_stdin"));
     println!(
         "{}",
         serde_json::to_string_pretty(&value).unwrap_or_else(|_| stdin_data)
@@ -457,12 +470,12 @@ mod tests {
 
     #[test]
     fn hud_err_marker_short_and_truncated() {
-        let short = hud_err_marker("parse stdin JSON: bad");
+        let short = hud_err_marker("parse stdin JSON: bad", Language::En);
         assert!(short.starts_with("[hud err] parse stdin JSON: bad"));
         assert!(short.contains("claude-hud doctor"));
 
         let long_msg = "x".repeat(200);
-        let long = hud_err_marker(&long_msg);
+        let long = hud_err_marker(&long_msg, Language::En);
         assert_eq!(
             long,
             format!("[hud err] {} — run 'claude-hud doctor'", "x".repeat(80))
@@ -472,19 +485,19 @@ mod tests {
     #[test]
     fn layout_from_mod_widgets_win() {
         let widgets = vec!["model_display".to_string(), "cost_display".to_string()];
-        let got = layout_from_mod(Some(&widgets), "minimal").unwrap();
+        let got = layout_from_mod(Some(&widgets), "minimal", Language::En).unwrap();
         assert_eq!(got, widgets);
     }
 
     #[test]
     fn layout_from_mod_minimal_maps() {
-        let got = layout_from_mod(None, "minimal").unwrap();
+        let got = layout_from_mod(None, "minimal", Language::En).unwrap();
         assert_eq!(got, vec!["model_display", "context_bar", "cost_display", "git_status"]);
     }
 
     #[test]
     fn layout_from_mod_activity_maps() {
-        let got = layout_from_mod(None, "activity").unwrap();
+        let got = layout_from_mod(None, "activity", Language::En).unwrap();
         assert_eq!(got.len(), 7);
         assert_eq!(got[0], "model_display");
         assert_eq!(got[6], "rate_limits");
@@ -492,7 +505,7 @@ mod tests {
 
     #[test]
     fn layout_from_mod_unknown_errors() {
-        let err = layout_from_mod(None, "agent-centric").unwrap_err();
+        let err = layout_from_mod(None, "agent-centric", Language::En).unwrap_err();
         assert!(err.contains("not implemented"));
     }
 

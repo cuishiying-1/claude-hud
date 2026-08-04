@@ -2,6 +2,7 @@ pub mod animation;
 pub mod ansi;
 pub mod config;
 pub mod history;
+pub mod i18n;
 pub mod pricing;
 pub mod scripting;
 pub mod session;

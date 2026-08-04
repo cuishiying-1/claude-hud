@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::{IconSet, Theme};
 use crate::core::transcript::TranscriptSummary;
@@ -56,37 +57,46 @@ impl Widget for SkillsMcpDynamic {
         parts.join(" │ ")
     }
 
-    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, _config: &WidgetConfig) {
+    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, config: &WidgetConfig) {
         let mut lines = vec![
-            Line::from(Span::styled("Skills & MCP — Dynamic",
+            Line::from(Span::styled(tr(config.lang, "runtime.skills_mcp_dynamic_title"),
                 Style::default().fg(ansi::parse_ratatui_color(&theme.accent)))),
         ];
         if let Ok(ref guard) = self.summary.lock() {
             if let Some(ref summary) = **guard {
                 if !summary.skill_calls.is_empty() {
-                    lines.push(Line::from(Span::styled("Skills:",
+                    lines.push(Line::from(Span::styled(tr(config.lang, "runtime.skills_colon"),
                         Style::default().fg(ansi::parse_ratatui_color(&theme.skill_color)))));
                     for skill in &summary.skill_calls {
                         let icon = if skill.is_active { "●" } else { "○" };
-                        lines.push(Line::from(format!("  {} {} ({} calls)", icon, skill.name, skill.call_count)));
+                        lines.push(Line::from(
+                            tr(config.lang, "runtime.skill_calls")
+                                .replace("{icon}", icon)
+                                .replace("{name}", &skill.name)
+                                .replace("{count}", &skill.call_count.to_string()),
+                        ));
                     }
                 }
                 if !summary.mcp_calls.is_empty() {
-                    lines.push(Line::from(Span::styled("MCP:",
+                    lines.push(Line::from(Span::styled(tr(config.lang, "runtime.mcp_colon"),
                         Style::default().fg(ansi::parse_ratatui_color(&theme.mcp_color)))));
                     let mut server_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
                     for call in &summary.mcp_calls {
                         *server_counts.entry(call.server.clone()).or_default() += call.call_count;
                     }
                     for (server, count) in &server_counts {
-                        lines.push(Line::from(format!("  ◆ {} ({} calls)", server, count)));
+                        lines.push(Line::from(
+                            tr(config.lang, "runtime.mcp_calls")
+                                .replace("{name}", server)
+                                .replace("{count}", &count.to_string()),
+                        ));
                     }
                 }
                 frame.render_widget(Paragraph::new(Text::from(lines)), area);
                 return;
             }
         }
-        lines.push(Line::from("No dynamic data"));
+        lines.push(Line::from(tr(config.lang, "runtime.no_dynamic")));
         frame.render_widget(Paragraph::new(Text::from(lines)), area);
     }
 

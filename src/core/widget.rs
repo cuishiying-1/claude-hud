@@ -8,6 +8,8 @@ use super::theme::Theme;
 #[derive(Debug, Clone)]
 pub struct WidgetConfig {
     pub values: std::collections::HashMap<String, String>,
+    /// 全局语言注入（config.widget_config 构建时写入；默认 En）。
+    pub lang: crate::core::i18n::Language,
 }
 
 impl WidgetConfig {
@@ -41,6 +43,7 @@ impl Default for WidgetConfig {
     fn default() -> Self {
         Self {
             values: std::collections::HashMap::new(),
+            lang: crate::core::i18n::Language::En,
         }
     }
 }

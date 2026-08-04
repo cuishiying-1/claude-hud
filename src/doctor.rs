@@ -1,5 +1,6 @@
 use crate::compact;
 use crate::core::config::AppConfig;
+use crate::core::i18n::{tr, Language};
 use crate::core::session::SessionData;
 use crate::core::state::StateFile;
 use crate::core::theme::Theme;
@@ -12,11 +13,13 @@ pub fn run(
     config: &AppConfig,
     theme: &Theme,
 ) -> Result<(), String> {
+    let lang = config.language();
     let mut failures = 0usize;
 
     let exe = std::env::current_exe().unwrap_or_default();
     failures += check(
-        "binary",
+        lang,
+        tr(lang, "runtime.d_check_binary"),
         true,
         &format!("{} (v{})", exe.display(), env!("CARGO_PKG_VERSION")),
         "",
@@ -26,16 +29,18 @@ pub fn run(
         Err(_) => false,
     };
     failures += check(
-        "config.toml",
+        lang,
+        tr(lang, "runtime.d_check_config"),
         config_ok,
-        "exists and parses",
-        "run 'claude-hud setup' to create it",
+        tr(lang, "runtime.d_config_ok"),
+        tr(lang, "runtime.d_config_hint"),
     );
     failures += check(
-        "statusLine configured",
+        lang,
+        tr(lang, "runtime.d_check_statusline"),
         status_line_ok(),
-        "points at claude-hud render",
-        "run 'claude-hud setup' to merge it into ~/.claude/settings.json",
+        tr(lang, "runtime.d_statusline_ok"),
+        tr(lang, "runtime.d_statusline_hint"),
     );
 
     let state_path = AppConfig::state_path();
@@ -44,10 +49,11 @@ pub fn run(
         .map(|p| !p.exists() || StateFile::read(p).snapshot.timestamp_secs != 0)
         .unwrap_or(true);
     failures += check(
-        "state.json",
+        lang,
+        tr(lang, "runtime.d_check_state"),
         state_ok,
-        "exists and parses (missing = never rendered yet)",
-        "run 'claude-hud render' once with real stdin JSON",
+        tr(lang, "runtime.d_state_ok"),
+        tr(lang, "runtime.d_state_hint"),
     );
 
     let last_err = match &state_path {
@@ -55,46 +61,65 @@ pub fn run(
         Err(_) => None,
     };
     failures += check(
-        "last render",
+        lang,
+        tr(lang, "runtime.d_check_last_render"),
         last_err.is_none(),
-        "no recorded failure",
-        "inspect state.json last_error, then run 'claude-hud render' to clear",
+        tr(lang, "runtime.d_last_render_ok"),
+        tr(lang, "runtime.d_last_render_hint"),
     );
     if let Some(le) = &last_err {
-        println!("    last failure at {}: {}", le.ts_iso, le.msg);
-    }
-
-    failures += check("icon set", true, &format!("{:?}", theme.icon_set), "");
-
-    match crate::probe::git::probe_git() {
-        Some(s) => {
-            println!("  [ok] git: branch '{}' readable", s.branch)
-        }
-        None => println!(
-            "  [..] git: unavailable or not a repo (widget degrades silently)"
-        ),
+        println!(
+            "{} {}: {}",
+            tr(lang, "runtime.d_last_failure"),
+            le.ts_iso,
+            le.msg
+        );
     }
 
     failures += check(
-        "sample render",
+        lang,
+        tr(lang, "runtime.d_check_icon"),
+        true,
+        &format!("{:?}", theme.icon_set),
+        "",
+    );
+
+    match crate::probe::git::probe_git() {
+        Some(s) => {
+            println!(
+                "{}",
+                tr(lang, "runtime.d_git_ok").replace("{branch}", &s.branch)
+            )
+        }
+        None => println!("{}", tr(lang, "runtime.d_git_degraded")),
+    }
+
+    failures += check(
+        lang,
+        tr(lang, "runtime.d_check_sample"),
         sample_render(registry, config, theme).is_ok(),
-        "renders without panic",
-        "check 'claude-hud render' with real stdin JSON",
+        tr(lang, "runtime.d_sample_ok"),
+        tr(lang, "runtime.d_sample_hint"),
     );
 
     contract_probe();
-    pricing_check(config, &mut failures);
-    budget_check();
-    update_check();
+    pricing_check(config, lang, &mut failures);
+    budget_check(lang);
+    let lang_ok = Language::from_str(&config.language).is_some();
+    failures += check(
+        lang,
+        "language",
+        lang_ok,
+        &format!("{}", config.language),
+        "valid values: en, zh",
+    );
+    update_check(lang);
 
     if failures == 0 {
-        println!("All checks passed.");
+        println!("{}", tr(lang, "runtime.doctor_all_passed"));
         Ok(())
     } else {
-        Err(format!(
-            "{} check(s) failed — see hints above",
-            failures
-        ))
+        Err(tr(lang, "runtime.d_failed").replace("{n}", &failures.to_string()))
     }
 }
 
@@ -200,9 +225,9 @@ fn contract_probe() {
 }
 
 /// ⑭ [pricing] 校验：负单价为 failure（含模型名定位）；否则信息项。
-fn pricing_check(config: &AppConfig, failures: &mut usize) {
+fn pricing_check(config: &AppConfig, lang: Language, failures: &mut usize) {
     if config.pricing.is_empty() {
-        println!("  [..] pricing: no [pricing] table (cost shown from official data)");
+        println!("{}", tr(lang, "runtime.d_no_pricing"));
         return;
     }
     let bad: Vec<&str> = config
@@ -215,57 +240,59 @@ fn pricing_check(config: &AppConfig, failures: &mut usize) {
         .collect();
     if bad.is_empty() {
         println!(
-            "  [ok] pricing: {} model(s) configured, prices non-negative",
-            config.pricing.len()
+            "{}",
+            tr(lang, "runtime.d_pricing_ok").replace("{n}", &config.pricing.len().to_string())
         );
     } else {
         println!(
-            "  [!!] pricing: negative price for model(s): {}",
-            bad.join(", ")
+            "{}",
+            tr(lang, "runtime.d_pricing_neg").replace("{models}", &bad.join(", "))
         );
         *failures += 1;
     }
 }
 
 /// ⑱ 升级检查（信息项，永不计数为 failure）。
-fn update_check() {
+fn update_check(lang: Language) {
     let status = crate::core::update::check_update();
     match &status {
         crate::core::update::UpdateStatus::UpToDate(v) => {
-            println!("  [ok] update: up to date (v{})", v)
+            println!("{}", tr(lang, "runtime.d_update_ok").replace("{v}", v))
         }
         crate::core::update::UpdateStatus::Available(v) => {
-            println!(
-                "  [ok] update: update available v{} — re-run the install script",
-                v
-            )
+            println!("{}", tr(lang, "runtime.d_update_avail").replace("{v}", v))
         }
-        _ => println!("  [..] update: {}", crate::core::update::describe(&status)),
+        _ => println!("  [..] update: {}", crate::core::update::describe(&status, lang)),
     }
 }
 
-fn check(label: &str, ok: bool, ok_detail: &str, hint: &str) -> usize {
+fn check(lang: Language, label: &str, ok: bool, ok_detail: &str, hint: &str) -> usize {
     if ok {
         println!("  [ok] {}: {}", label, ok_detail);
     } else {
-        println!("  [!!] {}: fix: {}", label, hint);
+        println!(
+            "{}",
+            tr(lang, "runtime.d_fail_line")
+                .replace("{label}", label)
+                .replace("{hint}", hint)
+        );
     }
     usize::from(!ok)
 }
 
 /// ⑳ 预算/告警冷却状态（信息项，恒 exit 0）：读 state.json 的
 /// alerts 冷却记录 + budget_tier（单调最高档位）。
-fn budget_check() {
+fn budget_check(lang: Language) {
     let state_path = match AppConfig::state_path() {
         Ok(p) => p,
         Err(_) => {
-            println!("  [..] budget: state path unavailable");
+            println!("{}", tr(lang, "runtime.d_budget_no_state"));
             return;
         }
     };
     let state = StateFile::read(&state_path);
     if state.budget_tier == 0 && state.alerts.is_empty() {
-        println!("  [..] budget: no alert records yet (render 后生效)");
+        println!("{}", tr(lang, "runtime.d_budget_no_records"));
         return;
     }
     let now = crate::core::state::now_secs();
@@ -278,8 +305,8 @@ fn budget_check() {
     }
     if state.budget_tier > 0 {
         println!(
-            "  [..] budget: tier {} reached (monotonic)",
-            state.budget_tier
+            "{}",
+            tr(lang, "runtime.d_budget_tier").replace("{tier}", &state.budget_tier.to_string())
         );
     }
 }

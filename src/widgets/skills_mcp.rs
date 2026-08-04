@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Text;
 
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::{IconSet, Theme};
 use crate::core::widget::{Widget, WidgetConfig};
@@ -31,7 +32,7 @@ impl Widget for SkillsMcp {
             ansi::ansi_fg(&mc.to_string(), &theme.fg))
     }
 
-    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, _config: &WidgetConfig) {
-        frame.render_widget(Text::from("Skills & MCP — Phase 1 static (Phase 2: dynamic tracking)"), area);
+    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, config: &WidgetConfig) {
+        frame.render_widget(Text::from(tr(config.lang, "runtime.skills_mcp_static")), area);
     }
 }

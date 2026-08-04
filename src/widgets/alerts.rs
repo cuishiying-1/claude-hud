@@ -8,6 +8,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::core::ansi;
 use crate::core::animation;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::state;
 use crate::core::theme::Theme;
@@ -51,7 +52,7 @@ impl Widget for Alerts {
             alerts.push(ansi::ansi_fg(&format!("{}{}{:.2}", prefix, symbol, cost), &theme.warning));
         }
         if data.rate_limits.five_hour.used_percentage >= 90.0 {
-            alerts.push(ansi::ansi_fg("5h limit!", &theme.danger));
+            alerts.push(ansi::ansi_fg(tr(config.lang, "runtime.rate_limited"), &theme.danger));
         }
         if let Ok(ref guard) = self.summary.lock() {
             if let Some(ref summary) = **guard {
@@ -59,14 +60,14 @@ impl Widget for Alerts {
                 if summary.timestamps_reliable {
                     let stalled = summary.stalled_agents(30, state::now_secs());
                     if !stalled.is_empty() {
-                        alerts.push(ansi::ansi_fg(&format!("⚠ {} stalled", stalled.len()), &theme.danger));
+                        alerts.push(ansi::ansi_fg(&format!("⚠ {} {}", stalled.len(), tr(config.lang, "runtime.stalled")), &theme.danger));
                     }
                 }
                 if let Some(minutes) = summary
                     .compaction_prediction(pct, data.context_window.context_window_size)
                 {
                     if minutes < 10 {
-                        alerts.push(ansi::ansi_fg(&format!("compact ~{}m", minutes), &theme.warning));
+                        alerts.push(ansi::ansi_fg(&format!("{} ~{}m", tr(config.lang, "runtime.compact_eta"), minutes), &theme.warning));
                     }
                 }
             }
@@ -80,20 +81,20 @@ impl Widget for Alerts {
         ];
         let pct = data.context_window.used_percentage;
         if pct >= config.get_f64("context_critical", 95.0) {
-            lines.push(Line::from(Span::styled(format!("⚠ CRITICAL: {:.0}% — compaction imminent", pct),
+            lines.push(Line::from(Span::styled(format!("⚠ {}: {:.0}% — {}", tr(config.lang, "runtime.critical_label"), pct, tr(config.lang, "runtime.compaction_imminent")),
                 Style::default().fg(ansi::parse_ratatui_color(&theme.danger)))));
         } else if pct >= config.get_f64("context_warn", 80.0) {
-            lines.push(Line::from(Span::styled(format!("⚠ WARNING: {:.0}%", pct),
+            lines.push(Line::from(Span::styled(format!("⚠ {}: {:.0}%", tr(config.lang, "runtime.warning_label"), pct),
                 Style::default().fg(ansi::parse_ratatui_color(&theme.warning)))));
         } else {
-            lines.push(Line::from("✓ No critical alerts"));
+            lines.push(Line::from(format!("✓ {}", tr(config.lang, "runtime.no_critical"))));
         }
         if let Ok(ref guard) = self.summary.lock() {
             if let Some(ref summary) = **guard {
                 if summary.timestamps_reliable {
                     for agent in summary.stalled_agents(30, state::now_secs()) {
                         lines.push(Line::from(Span::styled(
-                            format!("⚠ Agent '{}' stalled >30s", agent.name),
+                            format!("⚠ {} '{}' {} >30s", tr(config.lang, "runtime.agent_word"), agent.name, tr(config.lang, "runtime.stalled")),
                             Style::default().fg(ansi::parse_ratatui_color(&theme.danger)))));
                     }
                 }

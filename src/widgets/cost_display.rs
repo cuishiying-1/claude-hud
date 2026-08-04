@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Text;
 
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::widget::{Widget, WidgetConfig};
@@ -95,11 +96,21 @@ impl Widget for CostDisplay {
         *self.last_frame.lock().expect("frame clock") = now;
         let display_cost = self.eased.lock().expect("eased value").tick(data.cost.total_cost_usd, delta);
         let dur = data.cost.total_duration_ms / 1000;
-        let mut text = format!("Cost: ${:.4} | {}m {}s | +{}/-{} lines",
-            display_cost, dur / 60, dur % 60, data.cost.total_lines_added, data.cost.total_lines_removed);
+        let symbol = config.get_str("currency_symbol", "$");
+        let mut text = format!(
+            "{}: {}{:.4} | {}m {}s | +{}/-{} {}",
+            tr(config.lang, "runtime.cost_title"),
+            symbol,
+            display_cost,
+            dur / 60,
+            dur % 60,
+            data.cost.total_lines_added,
+            data.cost.total_lines_removed,
+            tr(config.lang, "runtime.lines")
+        );
         // ⑲ 未命中 [pricing] → 完整数据视图标注（命中时省略）
         if !config.get_bool("pricing_configured", false) {
-            text.push_str(&format!(" | 未配置单价 (model.id: {})", data.model.id));
+            text.push_str(&format!(" | {} (model.id: {})", tr(config.lang, "runtime.no_pricing"), data.model.id));
         }
         frame.render_widget(Text::from(text), area);
     }
@@ -139,6 +150,7 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            lang: crate::core::i18n::Language::En,
         }
     }
 

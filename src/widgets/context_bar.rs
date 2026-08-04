@@ -106,6 +106,7 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            lang: crate::core::i18n::Language::En,
         }
     }
 

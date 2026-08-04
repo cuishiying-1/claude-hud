@@ -694,7 +694,7 @@ README 宣称"full-screen TUI dashboard for deep diagnostics"、CHANGELOG 宣称
 | Homebrew tap / 其他分发 | 延期 | release 稳定 2 个版本 + 用户请求 |
 | 性能优化 | ✅ 已完成（v0.3 批次，2026-08-04） | token_timeline 上限 + 结账去重表 + serve 历史缓存 + 预算占比 + warning 清零；黑盒 141 例 |
 | 动画接入（v0.4 候选） | ✅ 已完成（v0.4 批次，2026-08-04） | 时间相位纯函数重建 animation.rs（now_phase/breathe/gradient/ease_out/scanline_offset，CLAUDE_HUD_PHASE env 黑盒确定性）+ 6 效果接线（渐变进度条/呼吸/缓动计数器/CRT 扫描线/伪 3D 面板/盲文频谱）+ tabbed 布局补全（四态循环 + ←/→ 切换）；黑盒 147 例 + 单元测试 136 个 |
-| 国际化 | **低优先级计划内**（用户拍板） | 同上；currency_symbol 配置（⑭）已就绪为基础 |
+| 国际化 | ✅ 已完成（v0.5 批次，2026-08-04） | language 键（en/zh 未知回退）+ locales/en|zh.toml 字符串表 + 回退链 + 运行时/clap 帮助/Web 三面覆盖 + CLAUDE_HUD_CONFIG env 注入；黑盒 152 例 + 单元测试 147 个 |
 | 竞品功能吸收 | 观察不吸收 | 用户反馈缺什么再抄；⑮组级截断思路已同 Barista |
 
 **路线图改写原则**（拍板）：COMPLETE.md 第 21 章每个 ⬜ 项附放行条件；无条件的项删除；路线图 = 决策表而非愿望列表。

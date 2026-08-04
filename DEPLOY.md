@@ -12,15 +12,15 @@ Claude HUD 是 Claude Code 的双模终端可视化插件：紧凑状态栏（�
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.ps1 | iex
 ```
 
 安装器自动完成：下载预编译二进制 → 加入 PATH → 运行 `claude-hud setup`（合并 statusLine 到 `~/.claude/settings.json`）。输出三态：`installing` / `up to date`（幂等跳过）/ `upgrading`。
 
-> **尚未发布**：当前仓库为占位符（`user/claude-hud`），安装脚本检测到后直接报错退出。真实 release 创建前请使用 `cargo build --release` 本地构建。
+> **尚无 release**：仓库已建立但未发布首个 release 时，安装脚本报 `cannot resolve latest release`（无网络时同理）。首个 release 创建前请使用 `cargo build --release` 本地构建。
 
 重启 Claude Code 或执行 `/reload-plugins`，状态栏底部应出现 HUD 显示。
 
@@ -30,10 +30,10 @@ irm https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/install.ps1
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/uninstall.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/uninstall.ps1 | iex
 ```
 
 ### 从源码构建（开发者）
@@ -67,7 +67,7 @@ claude-hud doctor
 | `claude-hud uninstall` | 移除 statusLine 与配置目录（卸载脚本内部调用） |
 | `claude-hud history` | 跨会话历史：Weekly stats / Recent sessions / Daily cost（空库显示 `—`） |
 | `claude-hud history --weekly` | 周报五指标：会话数/成本合计/token 总量/最长时长/最高单会话（空库 `—`；成本带 `≈`） |
-| `claude-hud update check` | 检查新版本（占位符仓库输出 `not published yet`） |
+| `claude-hud update check` | 检查新版本（仓库无 release 或离线时输出 `not published yet` / `update check unavailable`） |
 
 ### Mod 管理
 
@@ -138,6 +138,10 @@ Daily cost (last 7 days):
 - 与 `[alerts].cost_threshold_usd` 并存互不干扰，先到者先发。
 - **状态栏占比（v0.3）**：配置了 `cap_usd` 且成本 > 0 时，cost_display 组尾追加 ` · NN%`（实时成本 ÷ cap）；`cap_usd = 0`（默认关闭）时占比隐藏。
 
+### 国际化（v0.5）
+
+`language = "en" | "zh"` 键切换界面语言（未知值回退 en 并在 stderr 警告）。覆盖三面：**运行时输出**（render/doctor/history/mod/update 等）、**clap 帮助**（`--help` 后处理注入）、**Web 仪表盘**（HTML 标记替换 + JS 翻译表）。字符串表内嵌于 `locales/en.toml`（全量基准）与 `locales/zh.toml`（en 子集），回退链：当前语言 → en → key 本身。不翻译项：单位（`%`/`$`/`m`/`s`）、图标、健康检查协议体（`OK`）、console 内部日志。widget 显示名走 `widget.<id>` key，缺省回退英文稳定 id。
+
 ### 状态栏宽度
 
 紧凑模式输出做**宽度感知**：以 `COLUMNS` 环境变量为宽度源（statusLine 场景下终端不会真正 resize，环境变量是唯一可靠信号）。超出可用宽度时从行尾整组丢弃直至适配；单字段超过 24 字符（model 名 / git 分支 / 代理名）截断并加 `…`。`COLUMNS` 缺失或非法时默认 80 列，最小钳制 40 列。
@@ -168,6 +172,9 @@ claude-hud completion powershell  # 追加到 $PROFILE
 位置：`~/.claude/plugins/claude-hud/config.toml`
 
 ```toml
+# 界面语言（en | zh；未知值回退 en）
+language = "en"
+
 # 激活的 Mod
 active_mod = "glacier-workstation"
 

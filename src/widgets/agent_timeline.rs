@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Sparkline};
 
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::transcript::TranscriptSummary;
@@ -31,7 +32,7 @@ impl Widget for AgentTimeline {
         String::new()
     }
 
-    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, _config: &WidgetConfig) {
+    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, config: &WidgetConfig) {
         let mut lines: Vec<Line> = vec![];
         lines.push(Line::from(Span::styled("Agent Timeline",
             Style::default().fg(ansi::parse_ratatui_color(&theme.accent)))));
@@ -49,7 +50,7 @@ impl Widget for AgentTimeline {
                     let agent_list: Vec<String> = summary.agents.iter()
                         .map(|a| format!("{}{}", if a.is_active { "●" } else { "✓" }, a.name))
                         .collect();
-                    let text = format!("Agents: {}", agent_list.join(" · "));
+                    let text = format!("{}: {}", tr(config.lang, "runtime.timeline_agents"), agent_list.join(" · "));
                     let text_area = Rect { y: spark_area.y + spark_area.height + 1, height: 1, ..area };
                     frame.render_widget(Paragraph::new(Text::from(text)), text_area);
                     frame.render_widget(Paragraph::new(Text::from(lines)), area);
@@ -57,7 +58,7 @@ impl Widget for AgentTimeline {
                 }
             }
         }
-        lines.push(Line::from("No timeline data"));
+        lines.push(Line::from(tr(config.lang, "runtime.no_timeline")));
         frame.render_widget(Paragraph::new(Text::from(lines)), area);
     }
 

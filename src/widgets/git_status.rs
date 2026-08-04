@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Text;
 
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::widget::{Widget, WidgetConfig};
@@ -53,11 +54,25 @@ impl Widget for GitStatusWidget {
         output
     }
 
-    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, _config: &WidgetConfig) {
+    fn render_dashboard(&self, _data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, config: &WidgetConfig) {
         if let Ok(ref guard) = self.cached.lock() {
             let text = match guard.as_ref() {
-                Some(s) => format!("Branch: {} | Dirty: {} | Ahead: {} | Behind: {}", s.branch, s.is_dirty, s.ahead, s.behind),
-                None => "Git: not a repository".into(),
+                Some(s) => format!(
+                    "{}: {} | {}: {} | {}: {} | {}: {}",
+                    tr(config.lang, "runtime.branch"),
+                    s.branch,
+                    tr(config.lang, "runtime.dirty"),
+                    s.is_dirty,
+                    tr(config.lang, "runtime.ahead"),
+                    s.ahead,
+                    tr(config.lang, "runtime.behind"),
+                    s.behind
+                ),
+                None => format!(
+                    "{}: {}",
+                    tr(config.lang, "runtime.git"),
+                    tr(config.lang, "runtime.not_repo")
+                ),
             };
             frame.render_widget(Text::from(text), area);
         }

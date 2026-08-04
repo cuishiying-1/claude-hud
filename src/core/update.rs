@@ -1,8 +1,7 @@
 use std::cmp::Ordering;
 
-/// 发布仓库占位符：发布前与 install.sh / install.ps1 / Cargo.toml repository
-/// 同步替换为真实仓库；占位符阶段 update check 短路为 NotPublished（零网络）。
-pub const UPDATE_REPO: &str = "user/claude-hud";
+/// 发布仓库，与 install.sh / install.ps1 / Cargo.toml repository 同源。
+pub const UPDATE_REPO: &str = "cuishiying-1/claude-hud";
 
 /// 版本比较：按 `.` 分段逐段数字比较；段数不同时缺段视为 0；前缀 v 忽略。
 pub fn cmp_versions(a: &str, b: &str) -> Ordering {
@@ -33,17 +32,14 @@ pub enum UpdateStatus {
     UpToDate(String),
     /// 有新版本：携带最新版本号。
     Available(String),
-    /// 仓库未发布（占位符或 404）。
+    /// 仓库无 release（API 404）。
     NotPublished,
     /// 网络/其他错误。
     Unavailable,
 }
 
-/// 查询 GitHub latest release 与本地版本比较。占位符仓库零网络短路。
+/// 查询 GitHub latest release 与本地版本比较。
 pub fn check_update() -> UpdateStatus {
-    if UPDATE_REPO == "user/claude-hud" {
-        return UpdateStatus::NotPublished; // 占位符短路，零网络
-    }
     let url = format!(
         "https://api.github.com/repos/{}/releases/latest",
         UPDATE_REPO
@@ -79,14 +75,17 @@ fn extract_tag_name(body: &str) -> Option<String> {
 }
 
 /// 用户可读的检查结果（update check / doctor 共用；exit 0 恒定）。
-pub fn describe(status: &UpdateStatus) -> String {
+pub fn describe(status: &UpdateStatus, lang: crate::core::i18n::Language) -> String {
+    use crate::core::i18n::tr;
     match status {
-        UpdateStatus::UpToDate(v) => format!("✓ up to date (v{})", v),
-        UpdateStatus::Available(v) => {
-            format!("↗ update available: v{} — re-run the install script to upgrade", v)
+        UpdateStatus::UpToDate(v) => {
+            format!("{} (v{})", tr(lang, "runtime.up_to_date"), v)
         }
-        UpdateStatus::NotPublished => "not published yet".to_string(),
-        UpdateStatus::Unavailable => "update check unavailable".to_string(),
+        UpdateStatus::Available(v) => {
+            tr(lang, "runtime.update_available").replace("{version}", v)
+        }
+        UpdateStatus::NotPublished => tr(lang, "runtime.not_published").to_string(),
+        UpdateStatus::Unavailable => tr(lang, "runtime.update_unavailable").to_string(),
     }
 }
 
@@ -114,11 +113,12 @@ mod tests {
 
     #[test]
     fn describe_matches_spec_wording() {
-        assert_eq!(describe(&UpdateStatus::NotPublished), "not published yet");
-        assert_eq!(describe(&UpdateStatus::Unavailable), "update check unavailable");
-        assert_eq!(describe(&UpdateStatus::UpToDate("0.2.0".into())), "✓ up to date (v0.2.0)");
+        let en = crate::core::i18n::Language::En;
+        assert_eq!(describe(&UpdateStatus::NotPublished, en), "not published yet");
+        assert_eq!(describe(&UpdateStatus::Unavailable, en), "update check unavailable");
+        assert_eq!(describe(&UpdateStatus::UpToDate("0.2.0".into()), en), "✓ up to date (v0.2.0)");
         assert_eq!(
-            describe(&UpdateStatus::Available("0.3.0".into())),
+            describe(&UpdateStatus::Available("0.3.0".into()), en),
             "↗ update available: v0.3.0 — re-run the install script to upgrade"
         );
     }

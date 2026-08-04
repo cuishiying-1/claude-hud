@@ -8,10 +8,11 @@ mod serve;
 mod alert;
 mod widgets;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use compact::{ACTIVITY_WIDGETS, MINIMAL_WIDGETS};
 use core::cc_config;
 use core::history::HistoryStore;
+use core::i18n::{tr, tr_dyn};
 use core::config::AppConfig;
 use core::theme::{BorderStyle, IconSet, Theme};
 use core::state::{StateFile, now_secs, write_atomic};
@@ -129,8 +130,6 @@ enum WidgetCommands {
 }
 
 fn main() {
-    let cli = Cli::parse();
-
     // ⑤ 失败不再静默：解析失败 → stderr 警告 + 回退默认（doctor 可查）
     let config = match AppConfig::load() {
         Ok(c) => c,
@@ -142,6 +141,17 @@ fn main() {
             AppConfig::default()
         }
     };
+    if crate::core::i18n::Language::from_str(&config.language).is_none() {
+        eprintln!(
+            "[claude-hud] warning: invalid language '{}', falling back to en",
+            config.language
+        );
+    }
+    let lang = config.language();
+    // 语言来自 config：手动解析路径让 clap 帮助文本能注入翻译
+    let cmd = inject_help(Cli::command(), lang);
+    let matches = cmd.get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let mut theme = config.resolve_theme().theme;
     theme.icon_set = theme.resolve_icon_set();
     let mut registry = WidgetRegistry::new();
@@ -154,12 +164,12 @@ fn main() {
     let result = match cli.command {
         Commands::Render { dump } => {
             if dump {
-                match compact::dump_stdin() {
+                match compact::dump_stdin(config.language()) {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         let state_path = AppConfig::state_path().unwrap_or_default();
                         StateFile::write_last_error(&state_path, &e);
-                        println!("{}", compact::hud_err_marker(&e));
+                        println!("{}", compact::hud_err_marker(&e, config.language()));
                         Err(e)
                     }
                 }
@@ -174,7 +184,7 @@ fn main() {
                         // 同时在 stdout 打印可读标记（statusLine 输出原样上屏）。
                         let state_path = AppConfig::state_path().unwrap_or_default();
                         StateFile::write_last_error(&state_path, &e);
-                        println!("{}", compact::hud_err_marker(&e));
+                        println!("{}", compact::hud_err_marker(&e, config.language()));
                         Err(e)
                     }
                 }
@@ -186,27 +196,78 @@ fn main() {
             Box::leak(Box::new(config.clone())),
             Box::leak(Box::new(theme.clone())),
         ),
-        Commands::Setup => run_setup(),
-        Commands::Uninstall => run_uninstall(),
+        Commands::Setup => run_setup(lang),
+        Commands::Uninstall => run_uninstall(lang),
         Commands::Doctor => doctor::run(&registry, &config, &theme),
-        Commands::Mod(cmd) => handle_mod(cmd, &config),
-        Commands::Theme(cmd) => handle_theme(cmd, &config),
-        Commands::Widget(cmd) => handle_widget(cmd, &registry),
-        Commands::Completion { shell } => generate_completion(&shell),
-        Commands::History { weekly } => run_history(&config, weekly),
+        Commands::Mod(cmd) => handle_mod(cmd, &config, lang),
+        Commands::Theme(cmd) => handle_theme(cmd, &config, lang),
+        Commands::Widget(cmd) => handle_widget(cmd, &registry, lang),
+        Commands::Completion { shell } => generate_completion(&shell, lang),
+        Commands::History { weekly } => run_history(&config, weekly, lang),
         Commands::Update { cmd } => match cmd {
             UpdateCommands::Check => {
                 let status = core::update::check_update();
-                println!("{}", core::update::describe(&status));
+                println!("{}", core::update::describe(&status, config.language()));
                 Ok(())
             }
         },
     };
 
     if let Err(e) = result {
-        eprintln!("error: {}", e);
+        eprintln!("{}", tr(lang, "runtime.err").replace("{e}", &e));
         std::process::exit(1);
     }
+}
+
+/// 把语言注入 clap 帮助文本（命令名保持英文；文本走 tr）。
+/// clap 4.6 的 mut_subcommand/mut_arg 只匹配单层名称：嵌套子命令与
+/// 子命令参数必须在所属子命令的闭包内逐个注入。
+fn inject_help(cmd: clap::Command, lang: crate::core::i18n::Language) -> clap::Command {
+    cmd.about(tr(lang, "cli.about"))
+        .mut_subcommand("render", |c| {
+            c.about(tr(lang, "cli.render"))
+                .mut_arg("dump", |a| a.help(tr(lang, "cli.render_dump")))
+        })
+        .mut_subcommand("dashboard", |c| c.about(tr(lang, "cli.dashboard")))
+        .mut_subcommand("serve", |c| c.about(tr(lang, "cli.serve")))
+        .mut_subcommand("setup", |c| c.about(tr(lang, "cli.setup")))
+        .mut_subcommand("uninstall", |c| c.about(tr(lang, "cli.uninstall")))
+        .mut_subcommand("doctor", |c| c.about(tr(lang, "cli.doctor")))
+        .mut_subcommand("mod", |c| {
+            c.about(tr(lang, "cli.mod"))
+                .mut_subcommand("list", |cc| cc.about(tr(lang, "cli.mod_list")))
+                .mut_subcommand("use", |cc| cc.about(tr(lang, "cli.mod_use")))
+                .mut_subcommand("preview", |cc| cc.about(tr(lang, "cli.mod_preview")))
+                .mut_subcommand("current", |cc| cc.about(tr(lang, "cli.mod_current")))
+                .mut_subcommand("save", |cc| cc.about(tr(lang, "cli.mod_save")))
+                .mut_subcommand("export", |cc| cc.about(tr(lang, "cli.mod_export")))
+                .mut_subcommand("import", |cc| cc.about(tr(lang, "cli.mod_import")))
+                .mut_subcommand("delete", |cc| cc.about(tr(lang, "cli.mod_delete")))
+                .mut_subcommand("reset", |cc| cc.about(tr(lang, "cli.mod_reset")))
+                .mut_subcommand("pick", |cc| cc.about(tr(lang, "cli.mod_pick")))
+        })
+        .mut_subcommand("theme", |c| {
+            c.about(tr(lang, "cli.theme"))
+                .mut_subcommand("export", |cc| cc.about(tr(lang, "cli.theme_export")))
+                .mut_subcommand("import", |cc| cc.about(tr(lang, "cli.theme_import")))
+        })
+        .mut_subcommand("widget", |c| {
+            c.about(tr(lang, "cli.widget"))
+                .mut_subcommand("list", |cc| cc.about(tr(lang, "cli.widget_list")))
+                .mut_subcommand("test", |cc| cc.about(tr(lang, "cli.widget_test")))
+        })
+        .mut_subcommand("completion", |c| {
+            c.about(tr(lang, "cli.completion"))
+                .mut_arg("shell", |a| a.help(tr(lang, "cli.completion_shell")))
+        })
+        .mut_subcommand("history", |c| {
+            c.about(tr(lang, "cli.history"))
+                .mut_arg("weekly", |a| a.help(tr(lang, "cli.history_weekly")))
+        })
+        .mut_subcommand("update", |c| {
+            c.about(tr(lang, "cli.update"))
+                .mut_subcommand("check", |cc| cc.about(tr(lang, "cli.update_check")))
+        })
 }
 
 fn inject_probe_env() {
@@ -216,7 +277,7 @@ fn inject_probe_env() {
     std::env::set_var("CLAUDE_HUD_MCP_COUNT", mcp_count.to_string());
 }
 
-fn run_setup() -> Result<(), String> {
+fn run_setup(lang: crate::core::i18n::Language) -> Result<(), String> {
     let config_path = AppConfig::config_path()?;
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {}", e))?;
@@ -226,11 +287,17 @@ fn run_setup() -> Result<(), String> {
             .map_err(|e| format!("serialize config: {}", e))?;
         std::fs::write(&config_path, default_config)
             .map_err(|e| format!("write config: {}", e))?;
-        println!("Config written to {:?}", config_path);
+        println!(
+            "{}",
+            tr(lang, "runtime.setup_written").replace("{path}", &format!("{:?}", config_path))
+        );
     } else {
-        println!("Config already exists at {:?}", config_path);
+        println!(
+            "{}",
+            tr(lang, "runtime.setup_exists").replace("{path}", &format!("{:?}", config_path))
+        );
     }
-    setup_cc_settings()?;
+    setup_cc_settings(lang)?;
     Ok(())
 }
 
@@ -238,7 +305,7 @@ fn run_setup() -> Result<(), String> {
 /// backup (settings.json.hud.bak-<epoch>) is written only when an existing
 /// statusLine or unparseable JSON would be overwritten; the fixed-name
 /// json.bak is gone and .hud.bak-* is never deleted by setup/uninstall.
-fn setup_cc_settings() -> Result<(), String> {
+fn setup_cc_settings(lang: crate::core::i18n::Language) -> Result<(), String> {
     let home = dirs::home_dir()
         .ok_or_else(|| "cannot find home directory".to_string())?;
     let settings_path = home.join(".claude").join("settings.json");
@@ -258,11 +325,16 @@ fn setup_cc_settings() -> Result<(), String> {
         std::fs::write(&backup, &original)
             .map_err(|e| format!("backup settings.json: {}", e))?;
         if cc_config::has_status_line(&original) {
-            println!("replacing existing statusLine (backup at {:?})", backup);
+            println!(
+                "{}",
+                tr(lang, "runtime.setup_replacing")
+                    .replace("{path}", &format!("{:?}", backup))
+            );
         } else {
             println!(
-                "warning: settings.json is not valid JSON — original saved to {:?}; rebuilding with minimal config (restore other settings from the backup)",
-                backup
+                "{}",
+                tr(lang, "runtime.setup_bad_json")
+                    .replace("{path}", &format!("{:?}", backup))
             );
         }
     }
@@ -273,11 +345,14 @@ fn setup_cc_settings() -> Result<(), String> {
         cc_config::merge_status_line("")?
     };
     write_atomic(&settings_path, &merged)?;
-    println!("Claude Code status line configured in {:?}", settings_path);
+    println!(
+        "{}",
+        tr(lang, "runtime.setup_done").replace("{path}", &format!("{:?}", settings_path))
+    );
     Ok(())
 }
 
-fn run_uninstall() -> Result<(), String> {
+fn run_uninstall(lang: crate::core::i18n::Language) -> Result<(), String> {
     let home = dirs::home_dir()
         .ok_or_else(|| "cannot find home directory".to_string())?;
     let settings_path = home.join(".claude").join("settings.json");
@@ -288,9 +363,17 @@ fn run_uninstall() -> Result<(), String> {
             Ok(updated) => {
                 if updated != content {
                     write_atomic(&settings_path, &updated)?;
-                    println!("Removed statusLine from {:?}", settings_path);
+                    println!(
+                        "{}",
+                        tr(lang, "runtime.uninstall_removed")
+                            .replace("{path}", &format!("{:?}", settings_path))
+                    );
                 } else {
-                    println!("No statusLine found in {:?}; nothing to remove", settings_path);
+                    println!(
+                        "{}",
+                        tr(lang, "runtime.uninstall_none")
+                            .replace("{path}", &format!("{:?}", settings_path))
+                    );
                 }
             }
             Err(e) => eprintln!("warning: skip settings.json cleanup ({})", e),
@@ -300,22 +383,35 @@ fn run_uninstall() -> Result<(), String> {
     if config_dir.exists() {
         std::fs::remove_dir_all(&config_dir)
             .map_err(|e| format!("remove config dir: {}", e))?;
-        println!("Removed config dir {:?}", config_dir);
+        println!(
+            "{}",
+            tr(lang, "runtime.uninstall_dir").replace("{path}", &format!("{:?}", config_dir))
+        );
     }
-    println!("Your original settings backup (if any) is at ~/.claude/settings.json.hud.bak-* — copy it back over ~/.claude/settings.json to restore.");
-    println!("Done. The claude-hud binary can now be safely deleted.");
+    println!("{}", tr(lang, "runtime.uninstall_bak"));
+    println!("{}", tr(lang, "runtime.uninstall_done"));
     Ok(())
 }
 
-fn handle_mod(cmd: ModCommands, config: &AppConfig) -> Result<(), String> {
+fn handle_mod(
+    cmd: ModCommands,
+    config: &AppConfig,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
     match cmd {
         ModCommands::List => {
-            println!("Built-in presets:");
+            println!("{}", tr(lang, "runtime.mod_builtins"));
             for name in Theme::preset_names() {
                 let active = if name == &config.active_mod { " [active]" } else { "" };
-                println!("  {} ({}){}", name, "builtin", active);
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_list_line")
+                        .replace("{name}", name)
+                        .replace("{kind}", tr(lang, "runtime.mod_kind_builtin"))
+                        .replace("{active}", active)
+                );
             }
-            println!("\nUser mods:");
+            println!("{}", tr(lang, "runtime.mod_users"));
             let mods_dir = AppConfig::mods_dir()?;
             if mods_dir.exists() {
                 if let Ok(entries) = std::fs::read_dir(&mods_dir) {
@@ -323,7 +419,13 @@ fn handle_mod(cmd: ModCommands, config: &AppConfig) -> Result<(), String> {
                         let name = entry.file_name().to_string_lossy().to_string();
                         let name = name.strip_suffix(".toml").unwrap_or(&name);
                         let active = if name == config.active_mod { " [active]" } else { "" };
-                        println!("  {} ({}){}", name, "user", active);
+                        println!(
+                            "{}",
+                            tr(lang, "runtime.mod_list_line")
+                                .replace("{name}", name)
+                                .replace("{kind}", tr(lang, "runtime.mod_kind_user"))
+                                .replace("{active}", active)
+                        );
                     }
                 }
             }
@@ -334,49 +436,83 @@ fn handle_mod(cmd: ModCommands, config: &AppConfig) -> Result<(), String> {
                 let mut st = StateFile::read(&state_path);
                 let prev = match st.previous_mod.clone() {
                     Some(p) => p,
-                    None => return Err("no previous mod recorded (run 'mod use <name>' first)".into()),
+                    None => return Err(tr(lang, "runtime.mod_no_prev").to_string()),
                 };
                 st.previous_mod = Some(config.active_mod.clone());
                 st.write(&state_path)
                     .map_err(|e| format!("write state: {}", e))?;
                 write_active_mod(config, &prev)?;
-                println!("Switched back to mod '{}' ✓ (applies to all windows)", prev);
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_switched_back").replace("{name}", &prev)
+                );
                 return Ok(());
             }
             // ① 校验 + ③ @scene 解析：失败不写 config
-            let target = resolve_mod_target(&name)?;
+            let target = resolve_mod_target(&name, lang)?;
             let state_path = AppConfig::state_path()?;
             let mut st = StateFile::read(&state_path);
             st.previous_mod = Some(config.active_mod.clone());
             st.write(&state_path)
                 .map_err(|e| format!("write state: {}", e))?;
             write_active_mod(config, &target)?;
-            println!("Switched to mod '{}' ✓ (applies to all windows)", target);
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_switched").replace("{name}", &target)
+            );
         }
         ModCommands::Preview { name } => {
             let mod_pkg = AppConfig::load_mod(&name)?;
-            println!("Preview: {}", mod_pkg.mod_info.name);
-            println!("  Scene: {}", mod_pkg.mod_info.scene);
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_preview").replace("{name}", &mod_pkg.mod_info.name)
+            );
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_scene").replace("{scene}", &mod_pkg.mod_info.scene)
+            );
             if let Some(layout) = &mod_pkg.layout {
-                println!("  Layout: {} + {}", layout.compact, layout.dashboard);
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_layout_line")
+                        .replace("{compact}", &layout.compact)
+                        .replace("{dashboard}", &layout.dashboard)
+                );
             }
             if let Some(theme) = &mod_pkg.theme {
-                println!("  Theme: {}", theme.preset);
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_theme").replace("{theme}", &theme.preset)
+                );
             }
             if let Some(anim) = &mod_pkg.animation {
                 println!(
-                    "  Animation: {} (effects: {:?})",
-                    anim.enabled,
-                    anim.effects
+                    "{}",
+                    tr(lang, "runtime.mod_animation_line")
+                        .replace("{enabled}", &anim.enabled.to_string())
+                        .replace("{effects}", &format!("{:?}", anim.effects))
                 );
             }
         }
         ModCommands::Current => {
-            println!("Active mod: {}", config.active_mod);
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_active").replace("{name}", &config.active_mod)
+            );
             if let Ok(mod_pkg) = AppConfig::load_mod(&config.active_mod) {
-                println!("Name: {}", mod_pkg.mod_info.name);
-                println!("Description: {}", mod_pkg.mod_info.description);
-                println!("Scene: {}", mod_pkg.mod_info.scene);
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_name").replace("{name}", &mod_pkg.mod_info.name)
+                );
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_desc")
+                        .replace("{desc}", &mod_pkg.mod_info.description)
+                );
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_scene2").replace("{scene}", &mod_pkg.mod_info.scene)
+                );
             }
         }
         ModCommands::Save { name } => {
@@ -388,7 +524,12 @@ fn handle_mod(cmd: ModCommands, config: &AppConfig) -> Result<(), String> {
             let toml_str =
                 toml::to_string_pretty(&mod_pkg).map_err(|e| format!("serialize: {}", e))?;
             std::fs::write(&path, toml_str).map_err(|e| format!("write: {}", e))?;
-            println!("Saved mod '{}' to {:?} (applies to all windows)", name, path);
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_saved")
+                    .replace("{name}", &name)
+                    .replace("{path}", &format!("{:?}", path))
+            );
         }
         ModCommands::Export { name } => {
             let mod_pkg = AppConfig::load_mod(&name)?;
@@ -406,16 +547,27 @@ fn handle_mod(cmd: ModCommands, config: &AppConfig) -> Result<(), String> {
             let name = mod_pkg.mod_info.name.clone();
             let path = mods_dir.join(format!("{}.toml", name));
             std::fs::write(&path, &content).map_err(|e| format!("write: {}", e))?;
-            println!("Imported mod '{}' to {:?} (applies to all windows)", name, path);
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_imported")
+                    .replace("{name}", &name)
+                    .replace("{path}", &format!("{:?}", path))
+            );
         }
         ModCommands::Delete { name } => {
             let mods_dir = AppConfig::mods_dir()?;
             let path = mods_dir.join(format!("{}.toml", name));
             if path.exists() {
                 std::fs::remove_file(&path).map_err(|e| format!("remove: {}", e))?;
-                println!("Deleted mod '{}' (applies to all windows)", name);
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_deleted").replace("{name}", &name)
+                );
             } else {
-                println!("Mod '{}' not found (built-in mods cannot be deleted)", name);
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_not_found").replace("{name}", &name)
+                );
             }
         }
         ModCommands::Reset => {
@@ -425,7 +577,7 @@ fn handle_mod(cmd: ModCommands, config: &AppConfig) -> Result<(), String> {
                 toml::to_string_pretty(&default).map_err(|e| format!("serialize: {}", e))?;
             std::fs::write(&config_path, toml_str)
                 .map_err(|e| format!("write: {}", e))?;
-            println!("Reset to factory default (Glacier Workstation) (applies to all windows)");
+            println!("{}", tr(lang, "runtime.mod_reset"));
         }
         ModCommands::Pick => {
             let mut items: Vec<String> = Vec::new();
@@ -446,13 +598,16 @@ fn handle_mod(cmd: ModCommands, config: &AppConfig) -> Result<(), String> {
                 }
             }
             if items.is_empty() {
-                return Err("no mods available".into());
+                return Err(tr(lang, "runtime.mod_none").to_string());
             }
             for (i, name) in items.iter().enumerate() {
                 let active = if *name == config.active_mod { " [active]" } else { "" };
                 println!("  {}. {}{}", i + 1, name, active);
             }
-            print!("Select mod [1-{}]: ", items.len());
+            print!(
+                "{}",
+                tr(lang, "runtime.mod_select").replace("{n}", &items.len().to_string())
+            );
             use std::io::Write;
             std::io::stdout().flush().map_err(|e| format!("flush: {}", e))?;
             let mut line = String::new();
@@ -462,9 +617,13 @@ fn handle_mod(cmd: ModCommands, config: &AppConfig) -> Result<(), String> {
             let idx: usize = line
                 .trim()
                 .parse()
-                .map_err(|_| "invalid number".to_string())?;
+                .map_err(|_| tr(lang, "runtime.mod_invalid_num").to_string())?;
             if idx == 0 || idx > items.len() {
-                return Err(format!("invalid choice: {} (1-{})", idx, items.len()));
+                return Err(
+                    tr(lang, "runtime.mod_invalid_choice")
+                        .replace("{idx}", &idx.to_string())
+                        .replace("{n}", &items.len().to_string()),
+                );
             }
             let target = items[idx - 1].clone();
             let state_path = AppConfig::state_path()?;
@@ -473,7 +632,10 @@ fn handle_mod(cmd: ModCommands, config: &AppConfig) -> Result<(), String> {
             st.write(&state_path)
                 .map_err(|e| format!("write state: {}", e))?;
             write_active_mod(config, &target)?;
-            println!("Switched to mod '{}' ✓ (applies to all windows)", target);
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_switched").replace("{name}", &target)
+            );
         }
     }
     Ok(())
@@ -501,7 +663,10 @@ fn scene_alias(alias: &str) -> Option<&'static str> {
 }
 
 /// 按 scene 名查找第一个匹配的 mod（内置 6 个按出厂顺序，再用户 mods）。
-fn find_mod_by_scene(scene: &str) -> Result<String, String> {
+fn find_mod_by_scene(
+    scene: &str,
+    lang: crate::core::i18n::Language,
+) -> Result<String, String> {
     for name in BUILTIN_MODS {
         if let Ok(pkg) = AppConfig::load_mod(name) {
             if pkg.mod_info.scene == scene {
@@ -522,19 +687,22 @@ fn find_mod_by_scene(scene: &str) -> Result<String, String> {
             }
         }
     }
-    Err(format!("mod/scene '{}' not found", scene))
+    Err(tr(lang, "runtime.mod_scene_not_found").replace("{name}", scene))
 }
 
 /// 校验 + 解析 mod 目标名（@ 场景别名 → 实际 mod 名），失败返回 Err。
-fn resolve_mod_target(input: &str) -> Result<String, String> {
+fn resolve_mod_target(
+    input: &str,
+    lang: crate::core::i18n::Language,
+) -> Result<String, String> {
     let name = input.strip_prefix('@').unwrap_or(input);
     if let Some(scene) = scene_alias(name) {
-        return find_mod_by_scene(scene);
+        return find_mod_by_scene(scene, lang);
     }
     if AppConfig::load_mod(name).is_ok() {
         return Ok(name.to_string());
     }
-    find_mod_by_scene(name)
+    find_mod_by_scene(name, lang)
 }
 
 fn write_active_mod(config: &AppConfig, name: &str) -> Result<(), String> {
@@ -644,7 +812,11 @@ fn config_to_mod(config: &AppConfig, name: &str) -> crate::core::config::ModPack
     }
 }
 
-fn handle_theme(cmd: ThemeCommands, config: &AppConfig) -> Result<(), String> {
+fn handle_theme(
+    cmd: ThemeCommands,
+    config: &AppConfig,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
     match cmd {
         ThemeCommands::Export => {
             let theme = config.resolve_theme().theme;
@@ -663,7 +835,7 @@ fn handle_theme(cmd: ThemeCommands, config: &AppConfig) -> Result<(), String> {
                 None => parsed,
             };
             if !table.is_table() {
-                return Err("theme file must contain a [theme] table".into());
+                return Err(tr(lang, "runtime.theme_need_table").to_string());
             }
             let config_path = AppConfig::config_path()?;
             let mut root: toml::Value = std::fs::read_to_string(&config_path)
@@ -671,23 +843,34 @@ fn handle_theme(cmd: ThemeCommands, config: &AppConfig) -> Result<(), String> {
                 .and_then(|c| toml::from_str(&c).ok())
                 .unwrap_or_else(|| toml::Value::Table(Default::default()));
             root.as_table_mut()
-                .ok_or_else(|| "config.toml is not a table".to_string())?
+                .ok_or_else(|| tr(lang, "runtime.theme_bad_config").to_string())?
                 .insert("theme".into(), table);
             let out = toml::to_string_pretty(&root)
                 .map_err(|e| format!("serialize config: {}", e))?;
             std::fs::write(&config_path, out)
                 .map_err(|e| format!("write config: {}", e))?;
-            println!("Theme imported to config.toml [theme] section (applies to all windows)");
+            println!("{}", tr(lang, "runtime.theme_imported"));
         }
     }
     Ok(())
 }
 
-fn handle_widget(cmd: WidgetCommands, registry: &WidgetRegistry) -> Result<(), String> {
+fn handle_widget(
+    cmd: WidgetCommands,
+    registry: &WidgetRegistry,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
     match cmd {
         WidgetCommands::List => {
             for w in registry.list() {
-                println!("  {} — {}", w.id(), w.display_name());
+                // widget.<id> key 存在 → 翻译；否则回退原显示名（如脚本路径）
+                let translated = tr_dyn(lang, w.id());
+                let name = if translated == w.id() {
+                    w.display_name().to_string()
+                } else {
+                    translated.into_owned()
+                };
+                println!("  {} — {}", w.id(), name);
             }
         }
         WidgetCommands::Test { name } => {
@@ -697,9 +880,17 @@ fn handle_widget(cmd: WidgetCommands, registry: &WidgetRegistry) -> Result<(), S
                 let config = crate::core::widget::WidgetConfig::default();
                 let data = crate::core::session::SessionData::default();
                 let output = w.render_compact(&data, &theme, &config);
-                println!("Widget '{}': {}", name, output);
+                println!(
+                    "{}",
+                    tr(lang, "runtime.widget_test")
+                        .replace("{name}", &name)
+                        .replace("{out}", &output)
+                );
             } else {
-                println!("Widget '{}' not found", name);
+                println!(
+                    "{}",
+                    tr(lang, "runtime.widget_not_found").replace("{name}", &name)
+                );
             }
         }
     }
@@ -707,38 +898,52 @@ fn handle_widget(cmd: WidgetCommands, registry: &WidgetRegistry) -> Result<(), S
 }
 
 /// ⑨ `history`：本周统计 / 最近会话 / 近 7 天日费用。空库显示 —，不显示 0。
-fn run_history(config: &AppConfig, weekly: bool) -> Result<(), String> {
+fn run_history(
+    config: &AppConfig,
+    weekly: bool,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
     let store = HistoryStore::open()?;
     if weekly {
-        return print_weekly_report(&store, &config.currency_symbol);
+        return print_weekly_report(&store, &config.currency_symbol, lang);
     }
     let symbol = &config.currency_symbol;
     let weekly = store.weekly_stats()?;
-    println!("Weekly stats:");
+    println!("{}", tr(lang, "runtime.h_weekly"));
     if weekly.total_sessions == 0 {
-        println!("  Cost: — | Sessions: — | Tokens: — | Avg duration: — | Avg agents: —");
+        println!("{}", tr(lang, "runtime.h_weekly_empty"));
     } else {
         println!(
-            "  Cost: {}{:.2} | Sessions: {} | Tokens: {} | Avg duration: {:.1}m | Avg agents: {:.1}",
-            symbol, weekly.total_cost, weekly.total_sessions, weekly.total_tokens,
-            weekly.avg_duration_min, weekly.avg_agents_per_session,
+            "{}",
+            tr(lang, "runtime.h_weekly_line")
+                .replace("{sym}", symbol)
+                .replace("{cost}", &format!("{:.2}", weekly.total_cost))
+                .replace("{sessions}", &weekly.total_sessions.to_string())
+                .replace("{tokens}", &weekly.total_tokens.to_string())
+                .replace("{dur}", &format!("{:.1}", weekly.avg_duration_min))
+                .replace("{agents}", &format!("{:.1}", weekly.avg_agents_per_session))
         );
     }
-    println!("Recent sessions:");
+    println!("{}", tr(lang, "runtime.h_recent"));
     let recent = store.recent_sessions(5)?;
     if recent.is_empty() {
         println!("  —");
     } else {
         for r in recent {
             println!(
-                "  #{}  {}  {}{:.2}  {}  {} agents  {} tok",
-                r.id, r.started_at, symbol, r.total_cost_usd,
-                format_history_duration(r.duration_secs), r.agent_count,
-                format_history_tokens(r.total_tokens),
+                "{}",
+                tr(lang, "runtime.h_session_line")
+                    .replace("{id}", &r.id.to_string())
+                    .replace("{start}", &r.started_at)
+                    .replace("{sym}", symbol)
+                    .replace("{cost}", &format!("{:.2}", r.total_cost_usd))
+                    .replace("{dur}", &format_history_duration(r.duration_secs))
+                    .replace("{n}", &r.agent_count.to_string())
+                    .replace("{tok}", &format_history_tokens(r.total_tokens))
             );
         }
     }
-    println!("Daily cost (last 7 days):");
+    println!("{}", tr(lang, "runtime.h_daily"));
     let trend = store.daily_cost_trend()?;
     if trend.is_empty() {
         println!("  —");
@@ -751,22 +956,27 @@ fn run_history(config: &AppConfig, weekly: bool) -> Result<(), String> {
 }
 
 /// ㉑ 周报输出：空库全 —（不显示 0）；成本带 ≈（结账值可能为估算）。
-fn print_weekly_report(store: &HistoryStore, symbol: &str) -> Result<(), String> {
+fn print_weekly_report(
+    store: &HistoryStore,
+    symbol: &str,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
     let r = store.weekly_report()?;
-    println!("Weekly report (last 7 days):");
+    println!("{}", tr(lang, "runtime.history_weekly"));
     if r.sessions == 0 {
         println!("  —");
         return Ok(());
     }
     println!(
-        "  ≈{}{:.2} total | {} sessions | {} tok | longest {} | top session {}{:.2}",
-        symbol,
-        r.total_cost,
-        r.sessions,
-        format_history_tokens(r.total_tokens),
-        format_history_duration(r.longest_duration_secs),
-        symbol,
-        r.highest_cost_usd,
+        "{}",
+        tr(lang, "runtime.h_weekly_report_line")
+            .replace("{sym}", symbol)
+            .replace("{cost}", &format!("{:.2}", r.total_cost))
+            .replace("{n}", &r.sessions.to_string())
+            .replace("{tok}", &format_history_tokens(r.total_tokens))
+            .replace("{dur}", &format_history_duration(r.longest_duration_secs))
+            .replace("{sym2}", symbol)
+            .replace("{top}", &format!("{:.2}", r.highest_cost_usd))
     );
     Ok(())
 }
@@ -790,13 +1000,17 @@ fn format_history_tokens(tokens: u64) -> String {
 }
 
 /// Generate shell completions for the given shell name.
-fn generate_completion(shell: &str) -> Result<(), String> {
+fn generate_completion(
+    shell: &str,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
     // clap_complete 4.6 移除了 from_shell_name；Shell 的 FromStr 按
     // 名称解析（大小写不敏感），失败走统一错误路径 exit 1。
     let sh = shell
         .parse::<clap_complete::Shell>()
-        .map_err(|_| format!("unsupported shell: {}", shell))?;
-    clap_complete::generate(sh, &mut Cli::command(), "claude-hud", &mut std::io::stdout());
+        .map_err(|_| tr(lang, "runtime.unsupported_shell").replace("{shell}", shell))?;
+    let mut cmd = inject_help(Cli::command(), lang);
+    clap_complete::generate(sh, &mut cmd, "claude-hud", &mut std::io::stdout());
     Ok(())
 }
 

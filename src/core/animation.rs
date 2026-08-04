@@ -64,8 +64,12 @@ pub fn scanline_offset(phase: f64, height: u16) -> u16 {
 mod tests {
     use super::*;
 
+    // 两个 env 测试共享全局 CLAUDE_HUD_PHASE，必须串行执行（并行线程互相踩踏 set_var/remove_var）
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn now_phase_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("CLAUDE_HUD_PHASE", "0.25");
         assert_eq!(now_phase(8.0), 0.25);
         std::env::set_var("CLAUDE_HUD_PHASE", "0.0");
@@ -75,6 +79,7 @@ mod tests {
 
     #[test]
     fn now_phase_invalid_env_falls_back_to_wall_clock() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("CLAUDE_HUD_PHASE", "abc");
         assert!((0.0..1.0).contains(&now_phase(4.0)));
         std::env::set_var("CLAUDE_HUD_PHASE", "1.5");

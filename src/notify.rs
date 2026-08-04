@@ -1,3 +1,4 @@
+use crate::core::i18n::{tr, Language};
 use notify_rust::Notification;
 
 /// Send an OS-native desktop notification.
@@ -15,55 +16,57 @@ pub fn send(title: &str, body: &str) {
 }
 
 /// Convenience: context critical alert.
-pub fn context_critical(pct: f64) {
+pub fn context_critical(pct: f64, lang: Language) {
     send(
-        "⚠ Context Critical",
-        &format!("Context window at {:.0}%. Compaction imminent.", pct),
+        tr(lang, "notify.context_critical"),
+        &tr(lang, "notify.context_body").replace("{pct}", &format!("{:.0}", pct)),
     );
 }
 
 /// Convenience: all agents completed.
-pub fn agents_complete(count: usize) {
+pub fn agents_complete(count: usize, lang: Language) {
     send(
-        "✓ Agents Complete",
-        &format!("All {} agents have finished.", count),
+        tr(lang, "notify.agents_complete"),
+        &tr(lang, "notify.agents_body").replace("{n}", &count.to_string()),
     );
 }
 
 /// Convenience: cost threshold exceeded (symbol from config.currency_symbol).
-pub fn cost_threshold(cost: f64, threshold: f64, symbol: &str) {
+pub fn cost_threshold(cost: f64, threshold: f64, symbol: &str, lang: Language) {
     send(
-        "Cost Warning",
-        &format!(
-            "Session cost {}{:.2} exceeded threshold {}{:.2}.",
-            symbol, cost, symbol, threshold
-        ),
+        tr(lang, "notify.cost_warning"),
+        &tr(lang, "notify.cost_body")
+            .replace("{sym}", symbol)
+            .replace("{cost}", &format!("{:.2}", cost))
+            .replace("{threshold}", &format!("{:.2}", threshold)),
     );
 }
 
 /// Convenience: rate limit warning.
-pub fn rate_limit_warning(pct: f64) {
+pub fn rate_limit_warning(pct: f64, lang: Language) {
     send(
-        "⚠ Rate Limit",
-        &format!("Rate limit at {:.0}%. Consider pacing requests.", pct),
+        tr(lang, "notify.rate_limit"),
+        &tr(lang, "notify.rate_body").replace("{pct}", &format!("{:.0}", pct)),
     );
 }
 
 /// Convenience: stalled agent detected.
-pub fn agent_stalled(name: &str, seconds: u64) {
+pub fn agent_stalled(name: &str, seconds: u64, lang: Language) {
     send(
-        "⚠ Agent Stalled",
-        &format!("Agent '{}' has had no tool call for {}s.", name, seconds),
+        tr(lang, "notify.agent_stalled"),
+        &tr(lang, "notify.stalled_body")
+            .replace("{name}", name)
+            .replace("{secs}", &seconds.to_string()),
     );
 }
 
 /// Convenience: budget tier reached (⑳; cost is the realtime estimate).
-pub fn budget(pct: f64, cap: f64, symbol: &str) {
+pub fn budget(pct: f64, cap: f64, symbol: &str, lang: Language) {
     send(
-        "Budget Warning",
-        &format!(
-            "Session cost reached {:.0}% of budget {}{:.2}.",
-            pct, symbol, cap
-        ),
+        tr(lang, "notify.budget_warning"),
+        &tr(lang, "notify.budget_body")
+            .replace("{sym}", symbol)
+            .replace("{cap}", &format!("{:.2}", cap))
+            .replace("{pct}", &format!("{:.0}", pct)),
     );
 }

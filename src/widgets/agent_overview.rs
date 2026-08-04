@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Text;
 
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::widget::{Widget, WidgetConfig};
@@ -25,21 +26,30 @@ impl Widget for AgentOverview {
             else if active > 0 { ansi::ansi_fg("⚡", &theme.success) }
             else { ansi::ansi_fg("✓", &theme.muted) };
         parts.push(icon);
-        parts.push(ansi::ansi_fg(&format!("{}/{} agents", active, total),
+        parts.push(ansi::ansi_fg(&format!("{}/{} {}", active, total, tr(config.lang, "runtime.agents")),
             if stalled > 0 { &theme.warning } else { &theme.success }));
         if stalled > 0 {
-            parts.push(ansi::ansi_fg(&format!(" · {} stalled", stalled), &theme.danger));
+            parts.push(ansi::ansi_fg(&format!(" · {} {}", stalled, tr(config.lang, "runtime.stalled")), &theme.danger));
         }
         parts.join("")
     }
 
-    fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, _config: &WidgetConfig) {
+    fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, config: &WidgetConfig) {
         let empty_agents = Vec::new();
         let agents = data.subagent_status_line.as_ref().map(|s| &s.agents).unwrap_or(&empty_agents);
         let total = agents.len();
         let active = agents.iter().filter(|a| a.is_active).count();
         let done = total - active;
         let pct = if total > 0 { (done as f64 / total as f64) * 100.0 } else { 0.0 };
-        frame.render_widget(Text::from(format!("Agents — Total: {} | Active: {} | Done: {} | {:.0}%", total, active, done, pct)), area);
+        frame.render_widget(Text::from(format!(
+            "{}: {} | {}: {} | {}: {} | {:.0}%",
+            tr(config.lang, "runtime.agents_title"),
+            total,
+            tr(config.lang, "runtime.agents_active"),
+            active,
+            tr(config.lang, "runtime.agents_done"),
+            done,
+            pct
+        )), area);
     }
 }

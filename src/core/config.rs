@@ -43,6 +43,9 @@ pub struct AppConfig {
     #[serde(default = "default_currency_symbol")]
     pub currency_symbol: String,
 
+    #[serde(default = "default_language")]
+    pub language: String,
+
     #[serde(default)]
     pub pricing: HashMap<String, crate::core::pricing::PriceEntry>,
 }
@@ -53,6 +56,10 @@ fn default_active_mod() -> String {
 
 fn default_currency_symbol() -> String {
     "$".into()
+}
+
+fn default_language() -> String {
+    "en".into()
 }
 
 fn default_separator() -> String {
@@ -244,6 +251,11 @@ impl AppConfig {
     }
 
     pub fn config_path() -> Result<PathBuf, String> {
+        // CLAUDE_HUD_CONFIG 优先：黑盒测试注入临时语言配置
+        // （与 COLUMNS / CLAUDE_HUD_PHASE 的 env 注入先例一致）
+        if let Ok(p) = std::env::var("CLAUDE_HUD_CONFIG") {
+            return Ok(PathBuf::from(p));
+        }
         let base = dirs::home_dir()
             .ok_or_else(|| "cannot find home directory".to_string())?;
         Ok(base.join(".claude").join("plugins").join("claude-hud").join("config.toml"))
@@ -276,7 +288,13 @@ impl AppConfig {
                 values.insert(k.clone(), s);
             }
         }
-        WidgetConfig { values }
+        WidgetConfig { values, lang: self.language() }
+    }
+
+    /// 解析 language 键为 Language；非法值回退 En（警告在 main/doctor 入口各一次）。
+    pub fn language(&self) -> crate::core::i18n::Language {
+        crate::core::i18n::Language::from_str(&self.language)
+            .unwrap_or(crate::core::i18n::Language::En)
     }
 
     /// 主题叠加链：基底(mod preset 或 config preset 或 default) →
@@ -355,6 +373,7 @@ impl Default for AppConfig {
             alerts: AlertsConfig::default(),
             budget: BudgetConfig::default(),
             currency_symbol: "$".into(),
+            language: "en".into(),
             pricing: HashMap::new(),
         }
     }
@@ -382,6 +401,28 @@ mod tests {
         let c = AppConfig::default();
         assert_eq!(c.currency_symbol, "$");
         assert!(c.pricing.is_empty());
+    }
+
+    #[test]
+    fn language_field_defaults_and_parses() {
+        let c = AppConfig::default();
+        assert_eq!(c.language, "en");
+        assert_eq!(c.language(), crate::core::i18n::Language::En);
+
+        let zh: AppConfig = toml::from_str("language = \"zh\"\n").unwrap();
+        assert_eq!(zh.language(), crate::core::i18n::Language::Zh);
+
+        let bad: AppConfig = toml::from_str("language = \"xx\"\n").unwrap();
+        assert_eq!(bad.language(), crate::core::i18n::Language::En); // 静默回退（警告在 main 启动处）
+    }
+
+    #[test]
+    fn widget_config_injects_language() {
+        let cfg: AppConfig = toml::from_str("language = \"zh\"\n").unwrap();
+        let wc = cfg.widget_config("model_display");
+        assert_eq!(wc.lang, crate::core::i18n::Language::Zh);
+        let wc2 = AppConfig::default().widget_config("model_display");
+        assert_eq!(wc2.lang, crate::core::i18n::Language::En);
     }
 
     #[test]
@@ -448,5 +489,16 @@ mod tests {
         assert_eq!(r.preset.as_deref(), Some("dracula"));
         assert_eq!(r.theme.bg, "#282a36");
         assert_eq!(r.theme.accent, "#ff0000");
+    }
+
+    #[test]
+    fn config_path_env_override() {
+        let tmp = std::env::temp_dir().join("hud-i18n-test-config.toml");
+        std::env::set_var("CLAUDE_HUD_CONFIG", &tmp);
+        let p = AppConfig::config_path().expect("config path resolves");
+        assert_eq!(p, tmp);
+        std::env::remove_var("CLAUDE_HUD_CONFIG");
+        let p2 = AppConfig::config_path().expect("config path resolves");
+        assert_ne!(p2, tmp);
     }
 }

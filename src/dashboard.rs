@@ -16,6 +16,7 @@ use ratatui::Frame;
 
 use crate::alert;
 use crate::core::ansi;
+use crate::core::i18n::tr;
 use crate::core::animation;
 use crate::core::config::AppConfig;
 use crate::core::history::HistoryStore;
@@ -55,6 +56,7 @@ fn run_loop(
     config: &AppConfig,
     theme: &Theme,
 ) -> Result<(), String> {
+    let lang = config.language();
     let tick_rate = std::time::Duration::from_millis(config.dashboard.refresh_interval_ms);
     let mut last_agent_count: usize = 0;
     let mut notified_stalled: HashSet<String> = HashSet::new();
@@ -120,6 +122,7 @@ fn run_loop(
             &config.alerts,
             &config.currency_symbol,
             effective_cost,
+            lang,
         );
 
         // ⑪ 通知接线：代理全部结束（agents_edge 上升沿） / 代理卡顿（进程内去重）
@@ -130,7 +133,7 @@ fn run_loop(
             .map(|s| s.agents.len())
             .unwrap_or(0);
         if let Some(done) = agents_edge(last_agent_count, active) {
-            crate::notify::agents_complete(done);
+            crate::notify::agents_complete(done, lang);
         }
         last_agent_count = active;
 
@@ -148,7 +151,7 @@ fn run_loop(
                             .last_tool_call_secs
                             .map(|t| now.saturating_sub(t))
                             .unwrap_or(0);
-                        crate::notify::agent_stalled(&agent.name, idle);
+                        crate::notify::agent_stalled(&agent.name, idle, lang);
                     }
                 }
             }
@@ -238,6 +241,7 @@ fn draw_dashboard(
     show_help: bool,
 ) {
     let area = frame.area();
+    let lang = config.language();
 
     // 底部 1 行 footer；帮助面板展开时在其上方让出空间
     let areas = if show_help {
@@ -296,8 +300,12 @@ fn draw_dashboard(
         render_help(frame, h, config);
     }
     let footer = format!(
-        "Layout: {} · Mod: {} · l=cycle ?=help q=quit",
-        layout_name, config.active_mod
+        "{} {} · {} {} · {}",
+        tr(lang, "runtime.footer_layout"),
+        layout_name,
+        tr(lang, "runtime.footer_mod"),
+        config.active_mod,
+        tr(lang, "runtime.footer_hint")
     );
     frame.render_widget(Paragraph::new(Text::from(footer)), footer_area);
 }
@@ -372,16 +380,23 @@ fn draw_tabbed(
     area: ratatui::layout::Rect,
     tab_idx: usize,
 ) {
+    let lang = config.language();
     let tab_bar = ratatui::layout::Rect::new(area.x, area.y, area.width, 1);
     let mut spans: Vec<Span> = Vec::new();
     for (i, id) in config.compact_layout.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("  "));
         }
-        let name = registry
-            .get(id)
-            .map(|w| w.display_name().to_string())
-            .unwrap_or_else(|| id.clone());
+        // widget.<id> key 存在 → 翻译；否则回退原显示名（如脚本路径）
+        let translated = crate::core::i18n::tr_dyn(lang, id);
+        let name = if translated == id.as_str() {
+            registry
+                .get(id)
+                .map(|w| w.display_name().to_string())
+                .unwrap_or_else(|| id.clone())
+        } else {
+            translated.into_owned()
+        };
         let color = if i == tab_idx {
             ansi::parse_ratatui_color(&theme.accent)
         } else {
@@ -435,21 +450,22 @@ const HELP_PANEL_HEIGHT: u16 = 9;
 
 /// ⑯ 帮助面板：全部按键 + 全局生效说明。
 fn render_help(frame: &mut Frame, area: ratatui::layout::Rect, config: &AppConfig) {
+    let lang = config.language();
     let lines = vec![
-        Line::from("q / Esc  quit"),
-        Line::from("l        cycle layout (grid-2x2 → sidebar → focus → tabbed)"),
-        Line::from("←/→      switch tab (tabbed)"),
-        Line::from("?        toggle this help"),
+        Line::from(tr(lang, "runtime.help_quit")),
+        Line::from(tr(lang, "runtime.help_cycle")),
+        Line::from(tr(lang, "runtime.help_tab")),
+        Line::from(tr(lang, "runtime.help_help")),
         Line::from(""),
-        Line::from("Layout & mod changes are global — they apply to all windows"),
-        Line::from(format!(
-            "(persisted to config.toml) · Active mod: {}",
-            config.active_mod
-        )),
+        Line::from(tr(lang, "runtime.help_global")),
+        Line::from(
+            tr(lang, "runtime.help_persist")
+                .replace("{mod}", &config.active_mod),
+        ),
     ];
     frame.render_widget(
         Paragraph::new(Text::from(lines))
-            .block(ratatui::widgets::Block::bordered().title(" Help ")),
+            .block(ratatui::widgets::Block::bordered().title(tr(lang, "runtime.help_title"))),
         area,
     );
 }
