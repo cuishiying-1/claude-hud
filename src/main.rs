@@ -58,7 +58,11 @@ enum Commands {
         shell: String,
     },
     /// Cross-session usage history (weekly stats, recent sessions, daily cost)
-    History,
+    History {
+        /// ㉑ 周报五指标：会话数/成本/token 总量/最长时长/最高单会话
+        #[arg(long)]
+        weekly: bool,
+    },
     /// Upgrade checks
     Update {
         #[command(subcommand)]
@@ -189,7 +193,7 @@ fn main() {
         Commands::Theme(cmd) => handle_theme(cmd, &config),
         Commands::Widget(cmd) => handle_widget(cmd, &registry),
         Commands::Completion { shell } => generate_completion(&shell),
-        Commands::History => run_history(&config),
+        Commands::History { weekly } => run_history(&config, weekly),
         Commands::Update { cmd } => match cmd {
             UpdateCommands::Check => {
                 let status = core::update::check_update();
@@ -703,8 +707,11 @@ fn handle_widget(cmd: WidgetCommands, registry: &WidgetRegistry) -> Result<(), S
 }
 
 /// ⑨ `history`：本周统计 / 最近会话 / 近 7 天日费用。空库显示 —，不显示 0。
-fn run_history(config: &AppConfig) -> Result<(), String> {
+fn run_history(config: &AppConfig, weekly: bool) -> Result<(), String> {
     let store = HistoryStore::open()?;
+    if weekly {
+        return print_weekly_report(&store, &config.currency_symbol);
+    }
     let symbol = &config.currency_symbol;
     let weekly = store.weekly_stats()?;
     println!("Weekly stats:");
@@ -740,6 +747,27 @@ fn run_history(config: &AppConfig) -> Result<(), String> {
             println!("  {}  {}{:.2}", day, symbol, cost);
         }
     }
+    Ok(())
+}
+
+/// ㉑ 周报输出：空库全 —（不显示 0）；成本带 ≈（结账值可能为估算）。
+fn print_weekly_report(store: &HistoryStore, symbol: &str) -> Result<(), String> {
+    let r = store.weekly_report()?;
+    println!("Weekly report (last 7 days):");
+    if r.sessions == 0 {
+        println!("  —");
+        return Ok(());
+    }
+    println!(
+        "  ≈{}{:.2} total | {} sessions | {} tok | longest {} | top session {}{:.2}",
+        symbol,
+        r.total_cost,
+        r.sessions,
+        format_history_tokens(r.total_tokens),
+        format_history_duration(r.longest_duration_secs),
+        symbol,
+        r.highest_cost_usd,
+    );
     Ok(())
 }
 
