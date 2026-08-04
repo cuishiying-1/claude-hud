@@ -219,6 +219,7 @@ D2 = [
     render_case("D2-05", "全部 13 个 widget", "D2",
                 {"exit": 0, "stdout_contains": ["deepseek-v4-flash", "ctx", "0.03"]},
                 stdin_file="json/full.json",
+                env_extra={"COLUMNS": "200"},
                 config=open(fx("config/layout_all13.toml"), encoding="utf-8").read()),
     render_case("D2-06", "布局顺序重排（cost 在前）", "D2",
                 {"exit": 0, "stdout_contains": ["0.03"]},
@@ -231,6 +232,7 @@ D2 = [
     render_case("D2-07", "compact_lines=1 一行全拼", "D2",
                 {"exit": 0, "stdout_contains": ["deepseek-v4-flash", "ctx", "0.03"]},
                 stdin_file="json/full.json",
+                env_extra={"COLUMNS": "200"},
                 config=open(fx("config/lines1.toml"), encoding="utf-8").read()),
     render_case("D2-08", "compact_lines=3（6 widget）", "D2",
                 {"exit": 0, "stdout_contains": ["deepseek-v4-flash", "ctx"]},
@@ -532,8 +534,9 @@ def serve_case(cid, name, path, expect_status, expect_ct=None,
 D6 = [
     serve_case("D6-01", "GET /", "/", 200, "text/html; charset=utf-8"),
     serve_case("D6-02", "GET /api/data", "/api/data", 200, "application/json",
-               expect_json=True, expect_json_fields=["weekly"],
-               note="serve.rs 将 compact render（含 ANSI 码）嵌入 JSON 字段；harness 自动剥离 ANSI 后再 parse JSON；weekly 字段来自历史库（空库可用性标记）"),
+               expect_json=True,
+               expect_json_fields=["weekly", "pricing_configured"],
+               note="serve.rs 将 compact render（含 ANSI 码）嵌入 JSON 字段；harness 自动剥离 ANSI 后再 parse JSON；weekly 字段来自历史库（空库可用性标记）；pricing_configured ⑲ 未配置标注字段"),
     serve_case("D6-03", "GET /api/health", "/api/health", 200),
     serve_case("D6-04", "未知路由 404", "/nope", 404,
                note="行为发现点：未匹配路由行为以实测为准"),
@@ -685,8 +688,8 @@ P2 = [
                 stdin=j(full_dict()), config=DEFAULT_CONFIG,
                 transcript_copy="no_ts.jsonl",
                 note="任务④：首条无 timestamp → 降级路径，标志持久化为 false"),
-    render_case("P2-05", "[pricing] 命中重算 ≈$", "P2",
-                {"exit": 0, "stdout_contains": ["≈$0.56"], "stderr_empty": True},
+    render_case("P2-05", "[pricing] 命中重算 ≈$（实时路径）", "P2",
+                {"exit": 0, "stdout_contains": ["≈$16.80"], "stderr_empty": True},
                 stdin=j(full_dict()), config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
@@ -696,8 +699,7 @@ P2 = [
                     "[widgets]\n"
                     "[pricing]\n"
                     "\"deepseek-v4-flash\" = { input = 0.001, output = 0.002 }\n"),
-                transcript_copy="timestamps.jsonl",
-                note="任务⑭：timestamps.jsonl 累计 input=300 output=130 → 0.3+0.26=0.56，≈ 标注"),
+                note="任务⑲：双轨切换后 cost_display 走实时路径 — stdin 累计 6800/5000 × 单价 = 16.8，≈ 标注（transcript 不再参与状态栏成本）"),
     render_case("P2-06", "无 [pricing] 透传官方价", "P2",
                 {"exit": 0, "stdout_contains": ["$0.03"],
                  "stdout_not_contains": ["≈"]},
@@ -978,6 +980,101 @@ P4 = [
                 note="⑱：占位符仓库零网络返回 NotPublished（exit 0 恒定）"),
 ]
 
+# --- v0.2（⑲⑳㉑ 成本哨兵批次）---
+# P5-04 首次触发会发一次真实 OS 通知（budget 通知接线；可接受）。
+P5 = [
+    render_case("P5-01", "[pricing] 实时命中 ≈$ 合并组", "P5",
+                {"exit": 0, "stdout_contains": ["≈$16.80 · 6.8k/5.0k tok"]},
+                stdin=j(full_dict()), config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"cost_display\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"
+                    "[pricing]\n"
+                    "\"deepseek-v4-flash\" = { input = 0.001, output = 0.002 }\n"),
+                note="⑲：stdin 累计 6800/5000 × 单价 = 16.8 → ≈$16.80 · 6.8k/5.0k tok（实时路径无 cache → ≈）"),
+    render_case("P5-02", "无 [pricing] 透传合并组", "P5",
+                {"exit": 0, "stdout_contains": ["$0.03 · 6.8k/5.0k tok"],
+                 "stdout_not_contains": ["≈"]},
+                stdin_file="json/full.json", config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"cost_display\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"),
+                note="⑲：未命中 → 透传官方 0.03 无 ≈；token 组照常显示"),
+    render_case("P5-03", "网关零数据 cost_display — 降级", "P5",
+                {"exit": 0, "stdout_contains": ["—"],
+                 "stdout_not_contains": ["$0.00"]},
+                stdin=j(full_dict(**{"cost.total_cost_usd": 0.0,
+                                     "context_window.total_input_tokens": 0,
+                                     "context_window.total_output_tokens": 0})),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"cost_display\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[widgets]\n"),
+                note="⑲：无任何成本/用量数据 → —（不显示 $0.00 假精确）"),
+    render_case("P5-04", "[budget] 高成本触发档位单调", "P5",
+                {"exit": 0,
+                 "pre_state_json": {"equals": {"budget_tier": 3}},
+                 "state_json": {"equals": {"budget_tier": 3}},
+                 "state_json_same_as_pre": ["budget_tier"]},
+                stdin=j(full_dict(**{"cost.total_cost_usd": 15.0})),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"cost_display\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[alerts]\ncost_threshold_usd = 0\ncooldown_minutes = 10\n"
+                    "[budget]\ncap_usd = 5.0\nwarn_pcts = [50, 80, 100]\n"
+                    "[widgets]\n"),
+                pre_render=True,
+                note="⑳：15.0 ≥ 5.0×100% → tier 3；pre 触发（发一次真实 OS 通知）后二次 render 单调保持 3"),
+    render_case("P5-08", "doctor 报告预算档位与冷却", "P5",
+                {"stdout_contains": ["budget: tier 3", "alerts: Budget"]},
+                args=["doctor"],
+                stdin=j(full_dict(**{"cost.total_cost_usd": 15.0})),
+                config=(
+                    "active_mod = \"\"\n"
+                    "preset = \"full\"\n"
+                    "separator = \" │ \"\n"
+                    "compact_layout = [\"cost_display\"]\n"
+                    "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+                    "[alerts]\ncost_threshold_usd = 0\ncooldown_minutes = 10\n"
+                    "[budget]\ncap_usd = 5.0\nwarn_pcts = [50, 80, 100]\n"
+                    "[widgets]\n"),
+                pre_render=True,
+                note="⑳：pre_render 触发 tier 3 → doctor 读 state.json 输出档位与冷却记录（exit 不断言——statusLine 检查依赖真实环境）"),
+    render_case("P5-05", "history --weekly 五指标", "P5",
+                {"exit": 0, "stdout_contains": ["Weekly report",
+                                                "1 sessions",
+                                                "top session"]},
+                args=["history", "--weekly"], config=DEFAULT_CONFIG,
+                pre_cmds=[
+                    {"args": ["render"],
+                     "stdin": j(full_dict(**{"transcript_path": "/a.jsonl"}))},
+                    {"args": ["render"],
+                     "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+                ],
+                remove_db=True,
+                note="㉑：双 render 切换结账 1 条 → 五指标输出 1 sessions + top session；成本带 ≈"),
+    render_case("P5-07", "history --weekly 空库 —", "P5",
+                {"exit": 0, "stdout_contains": ["Weekly report", "—"]},
+                args=["history", "--weekly"], config=DEFAULT_CONFIG,
+                remove_db=True,
+                note="㉑：空库五指标位输出 —（不显示 0）"),
+    serve_case("P5-06", "/api/data 含 trend 字段", "/api/data", 200, "application/json",
+               expect_json=True, expect_json_fields=["trend", "pricing_configured"],
+               note="㉑：趋势字段（空库 available:false）+ ⑲ pricing_configured 存在性"),
+]
 
-CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4
-assert len(CASES) == 130, f"expected 130 cases, got {len(CASES)}"
+
+CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5
+assert len(CASES) == 138, f"expected 138 cases, got {len(CASES)}"
