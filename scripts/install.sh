@@ -2,7 +2,7 @@
 # Claude HUD installer for macOS / Linux
 set -euo pipefail
 
-REPO="${HUD_REPO:-user/claude-hud}"          # 发布前替换为真实仓库（如 yourname/claude-hud）
+REPO="${HUD_REPO:-cuishiying-1/claude-hud}"  # HUD_REPO 可覆盖（开发/测试）
 INSTALL_DIR="${HUD_INSTALL_DIR:-${HOME}/.local/bin}"
 
 case "$INSTALL_DIR" in
@@ -24,10 +24,6 @@ if [ -n "${HUD_LOCAL_BIN:-}" ]; then
   cp "$HUD_LOCAL_BIN" "$INSTALL_DIR/claude-hud"
   chmod +x "$INSTALL_DIR/claude-hud"
 else
-  if [ "$REPO" = "user/claude-hud" ]; then
-    echo "error: Claude HUD 尚未发布，请使用源码构建（cargo build --release）" >&2
-    exit 1
-  fi
   LATEST="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
     | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)" || true
   [ -n "$LATEST" ] || { echo "error: cannot resolve latest release of ${REPO}" >&2; exit 1; }
@@ -56,7 +52,7 @@ if ! echo ":$PATH:" | grep -q ":$INSTALL_DIR:"; then
     *)     RC_FILE="${HOME}/.bashrc" ;;
   esac
   if ! grep -qF "export PATH=\"$INSTALL_DIR" "$RC_FILE" 2>/dev/null; then
-    printf '\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$RC_FILE"
+    printf '\n%s\n' "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$RC_FILE"
   fi
   echo "Added $INSTALL_DIR to PATH in $RC_FILE (restart terminal or source it)"
 fi

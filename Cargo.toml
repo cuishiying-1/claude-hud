@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Dual-mode terminal HUD for Claude Code: compact status bar + full-screen TUI dashboard"
 license = "MIT"
-repository = "https://github.com/user/claude-hud"
+repository = "https://github.com/cuishiying-1/claude-hud"
 
 [[bin]]
 name = "claude-hud"

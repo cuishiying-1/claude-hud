@@ -16,15 +16,16 @@ Dual-mode terminal HUD for Claude Code. Compact status bar for daily use + full-
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.ps1 | iex
 ```
 
 The installer downloads a prebuilt binary, adds it to PATH, and configures the Claude Code status line. Restart Claude Code or run `/reload-plugins` to see the HUD.
 
-> **Not yet published** — the install scripts refuse to run against the placeholder repository until a real release is cut. Use `cargo build --release` locally for now.
+> **No release yet** — until the first GitHub release is cut, the install
+> scripts report that no release exists. Use `cargo build --release` locally for now.
 
 ## Upgrade
 
@@ -32,18 +33,14 @@ Re-run the install command to upgrade — the installer detects the installed
 version and upgrades automatically. `config.toml` and session history are kept
 in `~/.claude/plugins/claude-hud/` and survive upgrades.
 
-> **Not yet published** — the install scripts refuse to run against the
-> placeholder repository until a real release is cut. Use
-> `cargo build --release` locally for now.
-
 ## Uninstall
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/uninstall.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/uninstall.ps1 | iex
 ```
 
 ## Usage

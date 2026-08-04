@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 
 $Repo = $env:HUD_REPO
-if (-not $Repo) { $Repo = 'user/claude-hud' }   # 发布前替换为真实仓库
+if (-not $Repo) { $Repo = 'cuishiying-1/claude-hud' }   # HUD_REPO 可覆盖（开发/测试）
 
 $InstallDir = Join-Path $env:LOCALAPPDATA 'claude-hud\bin'
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
@@ -21,13 +21,17 @@ if ($LocalStub) {
     # 本地安装模式（开发/CI 冒烟）：不访问网络
     Copy-Item $LocalStub (Join-Path $InstallDir 'claude-hud.cmd') -Force
 } else {
-    if ($Repo -eq 'user/claude-hud') {
-        Write-Host 'error: Claude HUD 尚未发布，请使用源码构建（cargo build --release）'
-        exit 1
-    }
     # 兼容旧版 .NET：PS 5.1 需显式启用 TLS 1.2 才能访问 GitHub API
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
+    try {
+        $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
+    } catch {
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+            Write-Host 'error: Claude HUD 尚未发布（仓库暂无 release），请使用源码构建（cargo build --release）'
+            exit 1
+        }
+        throw
+    }
     $Tag = $Release.tag_name
     $VersionFile = Join-Path $InstallDir 'version.txt'
     if (Test-Path $VersionFile) {
