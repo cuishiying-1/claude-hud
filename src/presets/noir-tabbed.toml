@@ -1,17 +1,17 @@
-[mod]
+[mod_info]
 name = "Noir Tabbed"
 version = "1.0.0"
 description = "笔记本小屏优化 · 紧凑终端 · 标签切换 · 单面板专注"
 scene = "small-screen"
 
-[mod.layout]
+[layout]
 compact = "contextual"
 dashboard = "tabbed"
 compact_lines = 1
 
-[mod.theme]
+[theme]
 preset = "monochrome"
 
-[mod.animation]
+[animation]
 enabled = false
 effects = []

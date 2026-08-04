@@ -1,21 +1,21 @@
-[mod]
+[mod_info]
 name = "Obsidian Command Center"
 version = "1.0.0"
 description = "赛博朋克风 · Nerd图标 · 代理侧栏常驻 · 告警呼吸脉冲 · 重度代理专用"
 scene = "heavy-agent"
 
-[mod.layout]
+[layout]
 compact = "agent-centric"
 dashboard = "sidebar"
 compact_lines = 3
 
-[mod.theme]
+[theme]
 preset = "dracula"
 
-[mod.animation]
+[animation]
 enabled = true
 effects = ["neon-breathing", "glitch", "particle-burst"]
 
-[mod.widgets.agent_overview]
+[widgets.agent_overview]
 show_stalled = "true"
 stall_threshold_sec = "20"

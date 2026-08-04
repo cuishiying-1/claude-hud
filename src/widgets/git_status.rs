@@ -12,11 +12,12 @@ use crate::probe::git::GitStatus;
 
 pub struct GitStatusWidget {
     cached: Mutex<Option<GitStatus>>,
+    state_path: std::path::PathBuf,
 }
 
 impl GitStatusWidget {
-    pub fn new() -> Self {
-        Self { cached: Mutex::new(None) }
+    pub fn new(state_path: std::path::PathBuf) -> Self {
+        Self { cached: Mutex::new(None), state_path }
     }
 }
 
@@ -25,7 +26,7 @@ impl GitStatusWidget {
 pub fn render_git_status(status: Option<&GitStatus>, theme: &Theme) -> String {
     let mut parts = vec![];
     if let Some(ref s) = status {
-        parts.push(ansi::ansi_fg(&s.branch, &theme.accent));
+        parts.push(ansi::ansi_fg(&ansi::truncate(&s.branch, 24), &theme.accent));
         if s.is_dirty {
             parts.push(ansi::ansi_fg("*", &theme.warning));
         }
@@ -46,7 +47,7 @@ impl Widget for GitStatusWidget {
     fn display_name(&self) -> &str { "Git Status" }
 
     fn render_compact(&self, _data: &SessionData, theme: &Theme, _config: &WidgetConfig) -> String {
-        let status = crate::probe::git::probe_git();
+        let status = crate::probe::git::probe_git_cached(&self.state_path);
         let output = render_git_status(status.as_ref(), theme);
         if let Ok(ref mut guard) = self.cached.lock() { **guard = status; }
         output

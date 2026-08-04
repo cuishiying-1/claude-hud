@@ -14,7 +14,7 @@ impl Widget for ModelDisplay {
     fn display_name(&self) -> &str { "Model Display" }
 
     fn render_compact(&self, data: &SessionData, theme: &Theme, _config: &WidgetConfig) -> String {
-        let name = &data.model.display_name;
+        let name = ansi::truncate(&data.model.display_name, 24);
         let (icon, suffix) = match theme.icon_set {
             IconSet::Auto => ("> ", ""),   // 防御分支：所有渲染入口均已先决议 icon_set，此处正常不可达
             IconSet::Nerd | IconSet::Minimal => ("▸ ", ""),
@@ -22,7 +22,7 @@ impl Widget for ModelDisplay {
         };
         format!("{}{}{}{}",
             ansi::ansi_fg(icon, &theme.muted),
-            ansi::ansi_fg(name, &theme.model_color),
+            ansi::ansi_fg(&name, &theme.model_color),
             ansi::ansi_fg(suffix, &theme.muted),
             ansi::ansi_reset())
     }

@@ -1,8 +1,8 @@
-use std::io::Read;
 use tiny_http::{Response, Server};
 
 use crate::core::config::AppConfig;
-use crate::core::session::SessionData;
+use crate::core::history::HistoryStore;
+use crate::core::state;
 use crate::core::theme::Theme;
 use crate::core::widget::WidgetRegistry;
 
@@ -57,7 +57,7 @@ fn build_api_json(
     config: &AppConfig,
     theme: &Theme,
 ) -> String {
-    let data = read_current_data().unwrap_or_default();
+    let data = state::read_current_data().unwrap_or_default();
     let layout = &config.compact_layout;
 
     let widgets_json: Vec<String> = layout
@@ -76,13 +76,30 @@ fn build_api_json(
         .collect();
 
     format!(
-        r#"{{"model":"{}","context_pct":{},"cost_usd":{},"duration_ms":{},"widgets":[{}]}}"#,
+        r#"{{"model":"{}","context_pct":{},"cost_usd":{},"duration_ms":{},"weekly":{},"widgets":[{}]}}"#,
         data.model.display_name,
         data.context_window.used_percentage,
         data.cost.total_cost_usd,
         data.cost.total_duration_ms,
+        weekly_json(),
         widgets_json.join(","),
     )
+}
+
+/// ⑨ 本周聚合统计：open/query 失败 → available:false 全 0（前端显示 —）。
+fn weekly_json() -> String {
+    let weekly = HistoryStore::open()
+        .ok()
+        .and_then(|h| h.weekly_stats().ok());
+    match weekly {
+        Some(w) => format!(
+            r#"{{"available":true,"total_cost":{},"total_sessions":{},"total_tokens":{},"avg_duration_min":{},"avg_agents_per_session":{}}}"#,
+            w.total_cost, w.total_sessions, w.total_tokens, w.avg_duration_min,
+            w.avg_agents_per_session,
+        ),
+        None => r#"{"available":false,"total_cost":0,"total_sessions":0,"total_tokens":0,"avg_duration_min":0,"avg_agents_per_session":0}"#
+            .to_string(),
+    }
 }
 
 fn build_dashboard_html(
@@ -183,6 +200,11 @@ fn build_dashboard_html(
     <div class="metric-big" id="val-dur">--</div>
     <div class="metric-label">active</div>
   </div>
+  <div class="card">
+    <div class="card-title">This Week</div>
+    <div class="metric-big" id="val-week-cost">--</div>
+    <div class="metric-label"><span id="val-week-sessions">--</span> sessions</div>
+  </div>
 </div>
 
 <div id="widgets-area" style="margin-top:24px;"></div>
@@ -201,6 +223,14 @@ async function refresh() {
     const mins = Math.floor(data.duration_ms / 60000);
     const secs = Math.floor((data.duration_ms % 60000) / 1000);
     document.getElementById('val-dur').textContent = mins + 'm ' + secs + 's';
+    const wk = data.weekly || {};
+    if (wk.available) {
+      document.getElementById('val-week-cost').textContent = '$' + wk.total_cost.toFixed(2);
+      document.getElementById('val-week-sessions').textContent = wk.total_sessions;
+    } else {
+      document.getElementById('val-week-cost').textContent = '—';
+      document.getElementById('val-week-sessions').textContent = '—';
+    }
     document.getElementById('update-time').textContent = new Date().toLocaleTimeString();
 
     const area = document.getElementById('widgets-area');
@@ -225,9 +255,3 @@ setInterval(refresh, 2000);
 </html>"#.to_string()
 }
 
-fn read_current_data() -> Option<SessionData> {
-    use std::io::Read;
-    let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf).ok()?;
-    SessionData::from_stdin_json(&buf).ok()
-}

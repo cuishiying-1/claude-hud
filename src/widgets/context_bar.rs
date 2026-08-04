@@ -25,11 +25,13 @@ impl Widget for ContextBar {
         let color = if pct >= critical { &theme.danger } else if pct >= warn { &theme.warning } else { &theme.success };
         let filled_str = theme.bar_filled.to_string().repeat(filled);
         let empty_str = theme.bar_empty.to_string().repeat(empty);
-        format!("ctx {}{}{} {:.0}%",
+        format!("ctx {}{}{} {:.0}% {}/{} tok",
             ansi::ansi_fg(&filled_str, color),
             ansi::ansi_fg(&empty_str, &theme.border),
             ansi::ansi_reset(),
-            pct)
+            pct,
+            format_k(data.context_window.total_input_tokens),
+            format_k(data.context_window.total_output_tokens))
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, config: &WidgetConfig) {
@@ -45,5 +47,14 @@ impl Widget for ContextBar {
                 .ratio(pct / 100.0)
                 .label(format!("{:.0}% — {}/{} tokens", pct, used, max)),
             area);
+    }
+}
+
+/// k 缩写：≥1000 时 x.xk（12.3k），否则原样。
+fn format_k(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
     }
 }

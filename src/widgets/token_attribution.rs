@@ -32,11 +32,8 @@ impl Widget for TokenAttribution {
             if let Some(ref summary) = **guard {
                 let attr = summary.token_attribution();
                 if let Some((top_agent, pct)) = attr.first() {
-                    return format!("{}top:{} {:.0}%{}",
-                        ansi::ansi_fg("", &theme.muted),
-                        ansi::ansi_fg(&top_agent.name, &theme.accent),
-                        pct,
-                        ansi::ansi_reset());
+                    return format!("{}",
+                        ansi::ansi_fg(&format!("top:{} {:.0}%", top_agent.name, pct), &theme.accent));
                 }
             }
         }

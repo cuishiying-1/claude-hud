@@ -7,20 +7,19 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use crate::core::ansi;
-use crate::core::animation::AnimationState;
 use crate::core::session::SessionData;
+use crate::core::state;
 use crate::core::theme::Theme;
 use crate::core::transcript::TranscriptSummary;
 use crate::core::widget::{Widget, WidgetConfig};
 
 pub struct Alerts {
     summary: Mutex<Option<TranscriptSummary>>,
-    anim: Mutex<AnimationState>,
 }
 
 impl Alerts {
     pub fn new() -> Self {
-        Self { summary: Mutex::new(None), anim: Mutex::new(AnimationState::new(true)) }
+        Self { summary: Mutex::new(None) }
     }
 }
 
@@ -30,10 +29,6 @@ impl Widget for Alerts {
     fn display_name(&self) -> &str { "Alerts" }
 
     fn render_compact(&self, data: &SessionData, theme: &Theme, config: &WidgetConfig) -> String {
-        if let Ok(ref mut guard) = self.anim.lock() { guard.tick(); }
-        let anim = self.anim.lock().ok();
-        let frame = anim.map(|a| a.frame).unwrap_or(0);
-
         let mut alerts = vec![];
         let pct = data.context_window.used_percentage;
         let critical = config.get_f64("context_critical", 95.0);
@@ -41,24 +36,33 @@ impl Widget for Alerts {
         let cost_warn = config.get_f64("cost_warn_usd", 10.0);
 
         if pct >= critical {
-            let color = if frame % 40 < 20 { &theme.danger } else { &theme.warning };
+            let color = if time_phase(8) < 4 { &theme.danger } else { &theme.warning };
             alerts.push(ansi::ansi_fg(&format!("⚠ ctx {:.0}%", pct), color));
         } else if pct >= warn {
             alerts.push(ansi::ansi_fg(&format!("ctx {:.0}%", pct), &theme.warning));
         }
-        if data.cost.total_cost_usd >= cost_warn {
-            alerts.push(ansi::ansi_fg(&format!("¥{:.2}", data.cost.total_cost_usd), &theme.warning));
+        let cost = config.get_f64("effective_cost", data.cost.total_cost_usd);
+        let symbol = config.get_str("currency_symbol", "$");
+        let estimated = config.get_bool("cost_estimated", false);
+        if cost >= cost_warn {
+            let prefix = if estimated { "≈" } else { "" };
+            alerts.push(ansi::ansi_fg(&format!("{}{}{:.2}", prefix, symbol, cost), &theme.warning));
         }
         if data.rate_limits.five_hour.used_percentage >= 90.0 {
             alerts.push(ansi::ansi_fg("5h limit!", &theme.danger));
         }
         if let Ok(ref guard) = self.summary.lock() {
             if let Some(ref summary) = **guard {
-                let stalled = summary.stalled_agents(30, 0);
-                if !stalled.is_empty() {
-                    alerts.push(ansi::ansi_fg(&format!("⚠ {} stalled", stalled.len()), &theme.danger));
+                // 卡顿检测只在时间轴可靠时真实触发；不可靠会话不猜测
+                if summary.timestamps_reliable {
+                    let stalled = summary.stalled_agents(30, state::now_secs());
+                    if !stalled.is_empty() {
+                        alerts.push(ansi::ansi_fg(&format!("⚠ {} stalled", stalled.len()), &theme.danger));
+                    }
                 }
-                if let Some(minutes) = summary.compaction_prediction(pct, 200000) {
+                if let Some(minutes) = summary
+                    .compaction_prediction(pct, data.context_window.context_window_size)
+                {
                     if minutes < 10 {
                         alerts.push(ansi::ansi_fg(&format!("compact ~{}m", minutes), &theme.warning));
                     }
@@ -84,10 +88,12 @@ impl Widget for Alerts {
         }
         if let Ok(ref guard) = self.summary.lock() {
             if let Some(ref summary) = **guard {
-                for agent in summary.stalled_agents(30, 0) {
-                    lines.push(Line::from(Span::styled(
-                        format!("⚠ Agent '{}' stalled >30s", agent.name),
-                        Style::default().fg(ansi::parse_ratatui_color(&theme.danger)))));
+                if summary.timestamps_reliable {
+                    for agent in summary.stalled_agents(30, state::now_secs()) {
+                        lines.push(Line::from(Span::styled(
+                            format!("⚠ Agent '{}' stalled >30s", agent.name),
+                            Style::default().fg(ansi::parse_ratatui_color(&theme.danger)))));
+                    }
                 }
             }
         }
@@ -98,5 +104,25 @@ impl Widget for Alerts {
 
     fn update_transcript(&self, summary: &TranscriptSummary) {
         if let Ok(ref mut guard) = self.summary.lock() { **guard = Some(summary.clone()); }
+    }
+}
+
+/// Seconds-based phase so the breathing animation survives across 5s
+/// render processes (per-process frame counters would freeze the phase).
+fn time_phase(period: u64) -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() % period)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_phase_is_periodic() {
+        assert!(time_phase(8) < 8);
+        assert_eq!(time_phase(8), time_phase(8));
     }
 }

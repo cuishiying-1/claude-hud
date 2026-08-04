@@ -1,21 +1,21 @@
-[mod]
+[mod_info]
 name = "Ember Night Shift"
 version = "1.0.0"
 description = "深夜编码专用 · 琥珀暖色护眼 · 数据缓动动画 · 适合长时间工作"
 scene = "night-coding"
 
-[mod.layout]
+[layout]
 compact = "kpi"
 dashboard = "grid-2x2"
 compact_lines = 2
 
-[mod.theme]
+[theme]
 preset = "solarized-dark"
 
-[mod.animation]
+[animation]
 enabled = true
 effects = ["eased-counters"]
 
-[mod.widgets.context_bar]
+[widgets.context_bar]
 bar_width = "20"
 gradient = "true"

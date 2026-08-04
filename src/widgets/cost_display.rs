@@ -14,16 +14,14 @@ impl Widget for CostDisplay {
     fn display_name(&self) -> &str { "Cost Display" }
 
     fn render_compact(&self, data: &SessionData, theme: &Theme, config: &WidgetConfig) -> String {
-        let symbol = config.get_str("currency_symbol", "¥");
-        let cost = data.cost.total_cost_usd;
+        let symbol = config.get_str("currency_symbol", "$");
+        let cost = config.get_f64("effective_cost", data.cost.total_cost_usd);
+        let estimated = config.get_bool("cost_estimated", false);
         let warn = config.get_f64("warn_threshold_usd", 10.0);
         let color = if cost >= warn { &theme.warning } else { &theme.success };
-        format!(
-            "{}{:.2}{}",
-            ansi::ansi_fg(&symbol, color),
-            cost,
-            ansi::ansi_reset()
-        )
+        let prefix = if estimated { "≈" } else { "" };
+        format!("{}",
+            ansi::ansi_fg(&format!("{}{}{:.2}", prefix, symbol, cost), color))
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, _config: &WidgetConfig) {

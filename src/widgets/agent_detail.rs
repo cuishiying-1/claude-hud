@@ -13,6 +13,29 @@ use crate::core::theme::Theme;
 use crate::core::transcript::TranscriptSummary;
 use crate::core::widget::{Widget, WidgetConfig};
 
+/// 卡顿判定：真实触发需 now − last_tool_call > threshold；不可靠
+/// 时间轴不猜测（返回 false，避免行号代秒触发假告警）。
+fn is_stalled(
+    agent: &crate::core::transcript::AgentRecord,
+    summary: &TranscriptSummary,
+    now_secs: u64,
+    stall_secs: u64,
+) -> bool {
+    summary.timestamps_reliable
+        && agent
+            .last_tool_call_secs
+            .map(|t| now_secs.saturating_sub(t) > stall_secs)
+            .unwrap_or(false)
+}
+
+fn format_dur(secs: u64) -> String {
+    if secs >= 60 {
+        format!("{}m{}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
 pub struct AgentDetail {
     summary: Mutex<Option<TranscriptSummary>>,
     anim: Mutex<AnimationState>,
@@ -47,24 +70,23 @@ impl Widget for AgentDetail {
                     if !agent.is_active {
                         continue;
                     }
-                    let is_stalled = agent
-                        .last_tool_call_secs
-                        .map_or(false, |t| {
-                            agent.start_time_secs.saturating_sub(t) > stall_secs
-                        });
+                    let now = crate::core::state::now_secs();
+                    let is_stalled = is_stalled(agent, summary, now, stall_secs);
                     let status = if is_stalled {
                         ansi::ansi_fg("◐", &theme.danger)
                     } else {
                         ansi::ansi_fg("◐", &theme.success)
                     };
-                    let name = ansi::ansi_fg(&agent.name, &theme.accent);
+                    let name = ansi::ansi_fg(&ansi::truncate(&agent.name, 24), &theme.accent);
                     let task =
                         ansi::ansi_fg(&ansi::truncate(&agent.task_description, 40), &theme.muted);
-                    let elapsed = agent.start_time_secs;
-                    let elapsed_str = if elapsed >= 60 {
-                        format!("{}m{}s", elapsed / 60, elapsed % 60)
+                    let elapsed = summary
+                        .last_event_secs
+                        .map_or(0, |e| e.saturating_sub(agent.start_time_secs));
+                    let elapsed_str = if summary.timestamps_reliable {
+                        format_dur(elapsed)
                     } else {
-                        format!("{}s", elapsed)
+                        format!("≈{}", format_dur(elapsed))
                     };
                     let time = ansi::ansi_fg(&elapsed_str, &theme.muted);
                     parts.push(format!("{} {} {} {}", status, name, task, time));
@@ -80,7 +102,7 @@ impl Widget for AgentDetail {
         area: Rect,
         frame: &mut Frame,
         theme: &Theme,
-        _config: &WidgetConfig,
+        config: &WidgetConfig,
     ) {
         if let Ok(ref mut guard) = self.anim.lock() {
             guard.tick();
@@ -101,11 +123,9 @@ impl Widget for AgentDetail {
         if let Ok(ref guard) = lock {
             if let Some(ref summary) = **guard {
                 for agent in &summary.agents {
-                    let is_stalled = agent
-                        .last_tool_call_secs
-                        .map_or(false, |t| {
-                            agent.start_time_secs.saturating_sub(t) > 30
-                        });
+                    let now = crate::core::state::now_secs();
+                    let is_stalled =
+                        is_stalled(agent, summary, now, config.get_u64("stall_threshold_sec", 30));
                     let status_color = if is_stalled {
                         Color::Rgb(is_stalled_anim.0, is_stalled_anim.1, is_stalled_anim.2)
                     } else if agent.is_active {
@@ -150,5 +170,73 @@ impl Widget for AgentDetail {
         if let Ok(ref mut guard) = self.summary.lock() {
             **guard = Some(summary.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::transcript::AgentRecord;
+
+    fn summary(agents: Vec<AgentRecord>) -> TranscriptSummary {
+        let mut s = TranscriptSummary::default();
+        s.agents = agents;
+        s
+    }
+
+    #[test]
+    fn unreliable_session_elapsed_shows_approx_marker() {
+        let mut s = summary(vec![AgentRecord {
+            name: "a".into(),
+            is_active: true,
+            start_time_secs: 3,
+            ..Default::default()
+        }]);
+        s.timestamps_reliable = false;
+        let w = AgentDetail::new();
+        w.update_transcript(&s);
+        let out = w.render_compact(
+            &SessionData::default(),
+            &Theme::default(),
+            &WidgetConfig::default(),
+        );
+        assert!(out.contains("≈"), "unreliable elapsed must be marked: {}", out);
+    }
+
+    #[test]
+    fn reliable_session_elapsed_is_real_diff() {
+        let mut s = summary(vec![AgentRecord {
+            name: "a".into(),
+            is_active: true,
+            start_time_secs: 100,
+            ..Default::default()
+        }]);
+        s.timestamps_reliable = true;
+        s.last_event_secs = Some(160);
+        let w = AgentDetail::new();
+        w.update_transcript(&s);
+        let out = w.render_compact(
+            &SessionData::default(),
+            &Theme::default(),
+            &WidgetConfig::default(),
+        );
+        assert!(out.contains("1m0s"), "elapsed must be the real diff: {}", out);
+        assert!(!out.contains("≈"), "reliable session must not be marked: {}", out);
+    }
+
+    #[test]
+    fn is_stalled_requires_reliable_timeline_and_now() {
+        let mut s = TranscriptSummary::default();
+        s.timestamps_reliable = true;
+        let agent = AgentRecord {
+            name: "a".into(),
+            is_active: true,
+            last_tool_call_secs: Some(100),
+            ..Default::default()
+        };
+        assert!(is_stalled(&agent, &s, 200, 30));
+        assert!(!is_stalled(&agent, &s, 120, 30));
+        s.timestamps_reliable = false;
+        assert!(!is_stalled(&agent, &s, 200, 30));
     }
 }

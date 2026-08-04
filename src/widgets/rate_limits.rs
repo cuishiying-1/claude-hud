@@ -20,9 +20,9 @@ impl Widget for RateLimits {
         let warn = config.get_f64("rate_limit_warn", 90.0);
         let fc = if fh >= warn { &theme.danger } else { &theme.success };
         let sc = if sd >= warn { &theme.danger } else { &theme.success };
-        format!("5h:{}{:.0}%{} 7d:{}{:.0}%{}",
-            ansi::ansi_fg("", fc), fh, ansi::ansi_reset(),
-            ansi::ansi_fg("", sc), sd, ansi::ansi_reset())
+        format!("5h:{} 7d:{}",
+            ansi::ansi_fg(&format!("{:.0}%", fh), fc),
+            ansi::ansi_fg(&format!("{:.0}%", sd), sc))
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, _config: &WidgetConfig) {

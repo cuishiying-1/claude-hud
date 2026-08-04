@@ -39,17 +39,10 @@ impl Widget for SessionStats {
             .and_then(|g| g.as_ref())
             .map(|s| s.tool_counts.values().sum::<usize>())
             .unwrap_or(0);
-        format!("{}⏱{} {}· {}tok/s{} {}· {}calls{}{}",
-            ansi::ansi_fg("", &theme.muted),
-            ansi::ansi_fg(&dur_str, &theme.fg),
-            ansi::ansi_fg("", &theme.muted),
-            ansi::ansi_fg("", &theme.accent),
-            ansi::ansi_fg(&tok_per_sec.to_string(), &theme.fg),
-            ansi::ansi_fg("", &theme.muted),
-            ansi::ansi_fg("", &theme.accent),
-            ansi::ansi_fg(&total_tool_calls.to_string(), &theme.fg),
-            ansi::ansi_reset(),
-        )
+        format!("{} {} {}",
+            ansi::ansi_fg(&format!("⏱{}", dur_str), &theme.fg),
+            ansi::ansi_fg(&format!("{}tok/s", tok_per_sec), &theme.accent),
+            ansi::ansi_fg(&format!("{}calls", total_tool_calls), &theme.muted))
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, theme: &Theme, _config: &WidgetConfig) {
