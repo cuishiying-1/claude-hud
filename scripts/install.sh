@@ -24,14 +24,24 @@ if [ -n "${HUD_LOCAL_BIN:-}" ]; then
   cp "$HUD_LOCAL_BIN" "$INSTALL_DIR/claude-hud"
   chmod +x "$INSTALL_DIR/claude-hud"
 else
+  if [ "$REPO" = "user/claude-hud" ]; then
+    echo "error: Claude HUD 尚未发布，请使用源码构建（cargo build --release）" >&2
+    exit 1
+  fi
   LATEST="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
     | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)" || true
   [ -n "$LATEST" ] || { echo "error: cannot resolve latest release of ${REPO}" >&2; exit 1; }
+  LATEST_DISPLAY="${LATEST#v}"   # 展示用版本号；下载 URL 与 version.txt 保留原始 tag
 
-  if [ -f "$INSTALL_DIR/version.txt" ] \
-      && [ "$(cat "$INSTALL_DIR/version.txt")" = "$LATEST" ]; then
-    echo "claude-hud ${LATEST} already installed — nothing to do."
-    exit 0
+  if [ -f "$INSTALL_DIR/version.txt" ]; then
+    OLD="$(cat "$INSTALL_DIR/version.txt")"
+    if [ "$OLD" = "$LATEST" ]; then
+      echo "claude-hud v${LATEST_DISPLAY} is up to date"
+      exit 0
+    fi
+    echo "upgrading v${OLD#v} → v${LATEST_DISPLAY}"
+  else
+    echo "installing claude-hud v${LATEST_DISPLAY}"
   fi
 
   curl -fsSL "https://github.com/${REPO}/releases/download/${LATEST}/claude-hud-${TARGET}.tar.gz" \

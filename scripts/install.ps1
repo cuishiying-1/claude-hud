@@ -21,14 +21,24 @@ if ($LocalStub) {
     # 本地安装模式（开发/CI 冒烟）：不访问网络
     Copy-Item $LocalStub (Join-Path $InstallDir 'claude-hud.cmd') -Force
 } else {
+    if ($Repo -eq 'user/claude-hud') {
+        Write-Host 'error: Claude HUD 尚未发布，请使用源码构建（cargo build --release）'
+        exit 1
+    }
     # 兼容旧版 .NET：PS 5.1 需显式启用 TLS 1.2 才能访问 GitHub API
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
     $Tag = $Release.tag_name
     $VersionFile = Join-Path $InstallDir 'version.txt'
-    if ((Test-Path $VersionFile) -and ((Get-Content $VersionFile -Raw).Trim() -eq $Tag)) {
-        Write-Host "claude-hud $($Tag.Replace('v','')) already installed - nothing to do."
-        return
+    if (Test-Path $VersionFile) {
+        $Old = (Get-Content $VersionFile -Raw).Trim()
+        if ($Old -eq $Tag) {
+            Write-Host "claude-hud v$($Tag.TrimStart('v')) is up to date"
+            return
+        }
+        Write-Host "upgrading v$($Old.TrimStart('v')) → v$($Tag.TrimStart('v'))"
+    } else {
+        Write-Host "installing claude-hud v$($Tag.TrimStart('v'))"
     }
     $Zip = Join-Path $env:TEMP 'claude-hud-windows.zip'
     try {
