@@ -12,10 +12,10 @@ Claude HUD 是 Claude Code 的双模终端可视化插件：紧凑状态栏（�
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/install.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/install.ps1 | iex
 ```
 
 安装器自动完成：下载预编译二进制 → 加入 PATH → 运行 `claude-hud setup`（合并 statusLine 到 `~/.claude/settings.json`）。输出三态：`installing` / `up to date`（幂等跳过）/ `upgrading`。
@@ -30,10 +30,10 @@ irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/insta
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/uninstall.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/uninstall.ps1 | iex
 ```
 
 ### 从源码构建（开发者）

@@ -16,10 +16,10 @@ Dual-mode terminal HUD for Claude Code. Compact status bar for daily use + full-
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/install.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/install.ps1 | iex
 ```
 
 The installer downloads a prebuilt binary, adds it to PATH, and configures the Claude Code status line. Restart Claude Code or run `/reload-plugins` to see the HUD.
@@ -37,10 +37,10 @@ in `~/.claude/plugins/claude-hud/` and survive upgrades.
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/uninstall.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/uninstall.ps1 | iex
 ```
 
 ## Usage

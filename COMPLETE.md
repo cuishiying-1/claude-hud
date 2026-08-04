@@ -581,9 +581,9 @@ Claude Code 集成（`setup` 自动写入 settings.json）：
 
 ```bash
 # macOS/Linux
-curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/install.sh | bash
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/install.ps1 | iex
 ```
 
 安装器流程（install.sh）：
