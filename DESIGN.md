@@ -323,28 +323,30 @@ ctx ████░░ 52% │ ⚡ 3 agents · 2 running · 1 done │ ¥1.42
 | **Monochrome** | #1a1a1a | 纯灰度 | 极简主义，零干扰 |
 | **Solarized Dark** | #002b36 | 青 #2aa198 / 绿 #859900 / 黄 #b58900 | 经典终端，怀旧舒适 |
 
-### 三级配置深度
+### 主题引用（三级配置深度）
 
 ```toml
-# 级别 1：一行切换
+# 级别 1：一行切换（字符串预设名，替换基底）
 theme = "dracula"
 
-# 级别 2：预制 + 微调
-theme = "dracula"
+# 级别 2：预设引用 + 微调
+[theme]
+preset = "dracula"
 
 [theme.overrides]
 accent = "#ff79c6"
 bar_filled = "▓"
 
-# 级别 3：完全自定义
-theme = "custom"
-
-[theme.custom]
-bg = "#0a0a0a"
-fg = "#e0e0e0"
+# 级别 3：部分/完整表（显式键逐键覆盖基底，未写出的键用基底值）
+[theme]
 accent = "#ff6b6b"
-# ... 全部 20 个 token
+bar_width = 20
 ```
+
+叠加顺序（自低到高）：基底（active_mod 的 mod preset，否则 config 的 preset，否则默认 nord）
+→ config `[theme]` 显式键 → config `[theme.overrides]` → mod `[mod.theme.overrides]`（最高）。
+config 的 `theme = "..."` 字符串在 active_mod 存在时不参与叠加（基底已由 mod 决定）。
+坏 config 不再静默：stderr 打印 `[claude-hud] warning` 并回退默认，doctor `[!!]` 可查。
 
 ### 主题扩展能力
 
@@ -933,7 +935,7 @@ ratatui 事件循环 (500ms tick)
 # === 全局设置 ===
 mode = "compact"                    # compact | dashboard
 preset = "full"                     # full | essential | minimal
-theme = "dracula"                   # dracula | nord | tokyo-night | catppuccin | monochrome | solarized-dark | custom
+theme = "dracula"                   # dracula | nord | tokyo-night | catppuccin | monochrome | solarized-dark（自定义见「主题引用」三级别）
 
 # === 紧凑模式布局 ===
 compact_layout = [

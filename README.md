@@ -24,6 +24,18 @@ irm https://raw.githubusercontent.com/<user>/claude-hud/main/scripts/install.ps1
 
 The installer downloads a prebuilt binary, adds it to PATH, and configures the Claude Code status line. Restart Claude Code or run `/reload-plugins` to see the HUD.
 
+> **Not yet published** — the install scripts refuse to run against the placeholder repository until a real release is cut. Use `cargo build --release` locally for now.
+
+## Upgrade
+
+Re-run the install command to upgrade — the installer detects the installed
+version and upgrades automatically. `config.toml` and session history are kept
+in `~/.claude/plugins/claude-hud/` and survive upgrades.
+
+> **Not yet published** — the install scripts refuse to run against the
+> placeholder repository until a real release is cut. Use
+> `cargo build --release` locally for now.
+
 ## Uninstall
 
 ```bash
@@ -42,6 +54,9 @@ claude-hud mod list        # list available UI mods
 claude-hud mod use <name>  # switch UI mod (e.g. glacier-workstation)
 claude-hud dashboard       # full-screen TUI dashboard (q/Esc to exit)
 claude-hud serve           # web dashboard at localhost:9527
+claude-hud history         # weekly stats / recent sessions / daily cost
+claude-hud update check    # check for a new release
+claude-hud completion bash # generate shell completions (bash/zsh/fish/powershell)
 ```
 
 ## Configuration
