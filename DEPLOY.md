@@ -153,6 +153,8 @@ Daily cost (last 7 days):
 紧凑模式输出做**宽度感知**：以 `COLUMNS` 环境变量为宽度源（statusLine 场景下终端不会真正 resize，环境变量是唯一可靠信号）。超出可用宽度时从行尾整组丢弃直至适配；单字段超过 24 字符（model 名 / git 分支 / 代理名）截断并加 `…`。`COLUMNS` 缺失或非法时默认 80 列，最小钳制 40 列。
 
 > **v0.4 视觉增强**：context_bar 进度条默认逐 cell truecolor 渐变（success→danger；`gradient = "false"` 回退 3 档变色）；token_rate 显示 `tok 3.1k/min` 速率文本（transcript 尾桶增量口径，无数据时 `—`）；alerts 临界与 agent_detail 卡顿标记使用 4s 呼吸动画（`CLAUDE_HUD_PHASE` env 可固定相位用于测试）。逐 cell ANSI 色码不影响宽度口径（fit_line 先剥 ANSI 再测宽）。
+>
+> **v0.6 卡顿归因（⑮）**：agent_detail 卡顿标记扩展为 `stalled 3m15s · bash`（en）/ `卡顿 3m15s · bash`（zh）——时长（闲置秒数）+ 最后工具名归因，danger 色；alerts 卡顿行同步升级。无工具记录（旧会话/无 ToolUse）维持原 elapsed 显示。数据来自 transcript 工具归属（ToolUse 落点同步记 `last_tool_name`）；时间轴不可靠不显示（不假告警）。
 
 ```bash
 COLUMNS=100 claude-hud render < data.json   # 指定宽度

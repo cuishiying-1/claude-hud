@@ -48,6 +48,8 @@ pub struct AgentRecord {
     pub tokens_out: u64,
     #[serde(default)]
     pub tool_calls: usize,
+    #[serde(default)]
+    pub last_tool_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -394,6 +396,7 @@ impl TranscriptReader {
                         if let Some(active) = self.active_recent.clone() {
                             if let Some(agent) = self.agents.get_mut(&active) {
                                 agent.last_tool_call_secs = Some(current_secs);
+                                agent.last_tool_name = Some(name.clone());
                                 agent.tool_calls += 1;
                             }
                         }
@@ -408,6 +411,7 @@ impl TranscriptReader {
                             end_time_secs: None,
                             is_active: true,
                             last_tool_call_secs: None,
+                            last_tool_name: None,
                             tokens_in: 0,
                             tokens_out: 0,
                             tool_calls: 0,
@@ -587,6 +591,14 @@ mod tests {
         assert_eq!(alpha.end_time_secs, parse_iso_ts("2026-07-31T10:02:30Z"));
         assert!(!alpha.is_active);
         assert_eq!(alpha.tool_calls, 2);
+    }
+
+    #[test]
+    fn last_tool_name_attributed_to_active_agent() {
+        let mut reader = TranscriptReader::new(ts_fixture());
+        reader.read_updates();
+        let alpha = reader.agents.get("alpha").expect("alpha parsed");
+        assert_eq!(alpha.last_tool_name.as_deref(), Some("Read"));
     }
 
     #[test]

@@ -1378,7 +1378,44 @@ def b4_cases():
     ]
 
 
+def b5_cases():
+    """批次 V ⑮：卡顿归因。stalled.jsonl → alpha 卡在 Bash（可靠时间轴）。"""
+    agent_detail_cfg = (
+        "active_mod = \"\"\n"
+        "preset = \"full\"\n"
+        "separator = \" │ \"\n"
+        "compact_layout = [\"agent_detail\"]\n"
+        "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
+        "[widgets]\n"
+    )
+    return [
+        render_case(
+            "B5-01", "⑮ 卡顿归因 en（stalled fixture）", "batch5",
+            {"exit": 0, "stdout_contains": ["stalled", "· Bash"]},
+            stdin=j(full_dict(**{"model": {"id": "deepseek-v4-flash", "display_name": "DeepSeek"},
+                                 "transcript_path": fx("transcript/stalled.jsonl")})),
+            config=agent_detail_cfg,
+            env_extra={"CLAUDE_HUD_PHASE": "0.25"},
+            note="alpha 无 stop 且最后工具 Bash → 归因文本（idle 数天，断言稳定子串）"),
+        render_case(
+            "B5-02", "⑮ 卡顿归因 zh", "batch5",
+            {"exit": 0, "stdout_contains": ["卡顿", "· Bash"]},
+            stdin=j(full_dict(**{"model": {"id": "deepseek-v4-flash", "display_name": "DeepSeek"},
+                                 "transcript_path": fx("transcript/stalled.jsonl")})),
+            config="language = \"zh\"\n" + agent_detail_cfg,
+            env_extra={"CLAUDE_HUD_PHASE": "0"},
+            note="zh locale 归因文案"),
+        render_case(
+            "B5-03", "⑮ 不可靠时间轴不假告警", "batch5",
+            {"exit": 0, "stdout_not_contains": ["stalled", "卡顿"]},
+            stdin=j(full_dict(**{"model": {"id": "deepseek-v4-flash", "display_name": "DeepSeek"},
+                                 "transcript_path": fx("transcript/agents.jsonl")})),
+            config=agent_detail_cfg,
+            note="agents.jsonl 无 timestamp → timestamps_reliable=false → 无归因"),
+    ]
+
+
 CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7 \
-    + b1_cases() + b2_cases() + b3_cases() + b4_cases()
-# 156 + 3（B1-01..03）+ 1（B2-01）+ 2（B3-01/02）+ 3（B4-01/02/03）= 165（批次 I ①②③④）
-assert len(CASES) == 165, f"expected 165 cases, got {len(CASES)}"
+    + b1_cases() + b2_cases() + b3_cases() + b4_cases() + b5_cases()
+# 156 + 3（B1-01..03）+ 1（B2-01）+ 2（B3-01/02）+ 3（B4-01/02/03）+ 3（B5-01/02/03）= 168
+assert len(CASES) == 168, f"expected 168 cases, got {len(CASES)}"

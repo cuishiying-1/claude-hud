@@ -37,6 +37,14 @@ fn format_dur(secs: u64) -> String {
     }
 }
 
+/// ⑮ 卡顿归因文本：`stalled {dur} · {tool}`（en）/ `卡顿 {dur} · {tool}`（zh）。
+/// idle_secs 是闲置秒数（now − last_tool_call）；时长口径与 format_dur 一致。
+pub fn stalled_attr(idle_secs: u64, tool: &str, lang: crate::core::i18n::Language) -> String {
+    tr(lang, "runtime.stalled_attr")
+        .replace("{dur}", &format_dur(idle_secs))
+        .replace("{tool}", tool)
+}
+
 pub struct AgentDetail {
     summary: Mutex<Option<TranscriptSummary>>,
 }
@@ -86,7 +94,21 @@ impl Widget for AgentDetail {
                     } else {
                         format!("≈{}", format_dur(elapsed))
                     };
-                    let time = ansi::ansi_fg(&elapsed_str, &theme.muted);
+                    // ⑮ 卡顿归因：有最后工具名 → time 段替换为归因（danger 色）；
+                    // 无工具记录 → 维持现状（elapsed）。
+                    let time = if is_stalled {
+                        match &agent.last_tool_name {
+                            Some(tool) => {
+                                let idle = agent
+                                    .last_tool_call_secs
+                                    .map_or(0, |t| now.saturating_sub(t));
+                                ansi::ansi_fg(&stalled_attr(idle, tool, config.lang), &theme.danger)
+                            }
+                            None => ansi::ansi_fg(&elapsed_str, &theme.muted),
+                        }
+                    } else {
+                        ansi::ansi_fg(&elapsed_str, &theme.muted)
+                    };
                     parts.push(format!("{} {} {} {}", status, name, task, time));
                 }
             }
@@ -228,5 +250,65 @@ mod tests {
         assert!(!is_stalled(&agent, &s, 120, 30));
         s.timestamps_reliable = false;
         assert!(!is_stalled(&agent, &s, 200, 30));
+    }
+
+    #[test]
+    fn stalled_attr_formats_duration_and_tool() {
+        // idle 195s = 3m15s；en 文案 `stalled {dur} · {tool}`
+        assert_eq!(
+            stalled_attr(195, "bash", crate::core::i18n::Language::En),
+            "stalled 3m15s · bash"
+        );
+        assert_eq!(
+            stalled_attr(45, "Bash", crate::core::i18n::Language::En),
+            "stalled 45s · Bash"
+        );
+    }
+
+    #[test]
+    fn stalled_with_tool_shows_attribution() {
+        let mut s = summary(vec![AgentRecord {
+            name: "a".into(),
+            is_active: true,
+            last_tool_call_secs: Some(100),
+            last_tool_name: Some("bash".into()),
+            ..Default::default()
+        }]);
+        s.timestamps_reliable = true;
+        s.last_event_secs = Some(160);
+        let w = AgentDetail::new();
+        w.update_transcript(&s);
+        let out = w.render_compact(
+            &SessionData::default(),
+            &Theme::default(),
+            &WidgetConfig::default(),
+        );
+        // idle 依赖真实时钟（now − 100 巨大）→ 只断言稳定子串
+        assert!(out.contains("stalled"), "attribution word: {}", out);
+        assert!(out.contains("· bash"), "tool attribution: {}", out);
+    }
+
+    #[test]
+    fn stalled_without_tool_keeps_plain_elapsed() {
+        let mut s = summary(vec![AgentRecord {
+            name: "a".into(),
+            is_active: true,
+            start_time_secs: 100,
+            last_tool_call_secs: Some(100),
+            last_tool_name: None,
+            ..Default::default()
+        }]);
+        s.timestamps_reliable = true;
+        s.last_event_secs = Some(160);
+        let w = AgentDetail::new();
+        w.update_transcript(&s);
+        let out = w.render_compact(
+            &SessionData::default(),
+            &Theme::default(),
+            &WidgetConfig::default(),
+        );
+        // 无工具记录 → 维持现状（elapsed 仍显示，无归因文本）
+        assert!(out.contains("1m0s"), "elapsed unchanged: {}", out);
+        assert!(!out.contains("stalled"), "no attribution: {}", out);
     }
 }

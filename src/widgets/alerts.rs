@@ -92,9 +92,28 @@ impl Widget for Alerts {
         if let Ok(ref guard) = self.summary.lock() {
             if let Some(ref summary) = **guard {
                 if summary.timestamps_reliable {
-                    for agent in summary.stalled_agents(30, state::now_secs()) {
+                    let now = state::now_secs();
+                    for agent in summary.stalled_agents(30, now) {
+                        // ⑮ 卡顿归因：有最后工具名 → 归因文本；无 → 维持原格式
+                        let line_text = match &agent.last_tool_name {
+                            Some(tool) => {
+                                let idle = agent.last_tool_call_secs.map_or(0, |t| now.saturating_sub(t));
+                                format!(
+                                    "⚠ {} '{}' {}",
+                                    tr(config.lang, "runtime.agent_word"),
+                                    agent.name,
+                                    crate::widgets::agent_detail::stalled_attr(idle, tool, config.lang)
+                                )
+                            }
+                            None => format!(
+                                "⚠ {} '{}' {} >30s",
+                                tr(config.lang, "runtime.agent_word"),
+                                agent.name,
+                                tr(config.lang, "runtime.stalled")
+                            ),
+                        };
                         lines.push(Line::from(Span::styled(
-                            format!("⚠ {} '{}' {} >30s", tr(config.lang, "runtime.agent_word"), agent.name, tr(config.lang, "runtime.stalled")),
+                            line_text,
                             Style::default().fg(ansi::parse_ratatui_color(&theme.danger)))));
                     }
                 }
