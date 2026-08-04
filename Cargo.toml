@@ -11,8 +11,13 @@ name = "claude-hud"
 path = "src/main.rs"
 
 [dependencies]
+# Time (no default "clock" feature: iana-time-zone needs dlltool on Windows,
+# and we only format UTC timestamps, never local time)
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
 # CLI
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -40,6 +45,9 @@ notify-rust = "4"
 
 # Filesystem
 dirs = "5"
+
+# 终端宽度测量（Phase 4 ⑮）
+unicode-width = "0.2"
 
 [profile.release]
 opt-level = 3
