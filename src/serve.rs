@@ -75,13 +75,17 @@ fn build_api_json(
         })
         .collect();
 
+    let pricing_configured = config.pricing.contains_key(&data.model.id);
     format!(
-        r#"{{"model":"{}","context_pct":{},"cost_usd":{},"duration_ms":{},"weekly":{},"widgets":[{}]}}"#,
+        r#"{{"model":"{}","model_id":"{}","pricing_configured":{},"context_pct":{},"cost_usd":{},"duration_ms":{},"weekly":{},"trend":{},"widgets":[{}]}}"#,
         data.model.display_name,
+        data.model.id,
+        pricing_configured,
         data.context_window.used_percentage,
         data.cost.total_cost_usd,
         data.cost.total_duration_ms,
         weekly_json(),
+        trend_json(),
         widgets_json.join(","),
     )
 }
@@ -99,6 +103,23 @@ fn weekly_json() -> String {
         ),
         None => r#"{"available":false,"total_cost":0,"total_sessions":0,"total_tokens":0,"avg_duration_min":0,"avg_agents_per_session":0}"#
             .to_string(),
+    }
+}
+
+/// ㉑ 近 7 天日成本趋势（供周曲线）：open/query 失败或无数据 → available:false。
+fn trend_json() -> String {
+    let trend = HistoryStore::open()
+        .ok()
+        .and_then(|h| h.daily_cost_trend().ok());
+    match trend {
+        Some(days) if !days.is_empty() => {
+            let days_json: Vec<String> = days
+                .iter()
+                .map(|(day, cost)| format!(r#"{{"day":"{}","cost":{}}}"#, day, cost))
+                .collect();
+            format!(r#"{{"available":true,"days":[{}]}}"#, days_json.join(","))
+        }
+        _ => r#"{"available":false,"days":[]}"#.to_string(),
     }
 }
 
@@ -179,6 +200,7 @@ fn build_dashboard_html(
   <div class="status">● Live · <span id="update-time">--</span></div>
 </div>
 
+<div id="pricing-note" style="display:none;color:#d29922;font-size:11px;margin-bottom:12px;"></div>
 <div class="grid" id="dashboard-grid">
   <div class="card">
     <div class="card-title">Model</div>
@@ -207,6 +229,11 @@ fn build_dashboard_html(
   </div>
 </div>
 
+  <div class="card" id="trend-card" style="display:none;">
+    <div class="card-title">Weekly cost trend</div>
+    <div id="trend-bars" style="display:flex;align-items:flex-end;gap:6px;height:64px;margin-top:8px;"></div>
+  </div>
+
 <div id="widgets-area" style="margin-top:24px;"></div>
 
 <div class="realtime">Refreshing every 2s · http://localhost:9527</div>
@@ -230,6 +257,32 @@ async function refresh() {
     } else {
       document.getElementById('val-week-cost').textContent = '—';
       document.getElementById('val-week-sessions').textContent = '—';
+    }
+    const note = document.getElementById('pricing-note');
+    if (data.pricing_configured) {
+      note.style.display = 'none';
+    } else {
+      note.textContent = '当前模型未配置单价 (model.id: ' + data.model_id + ') — 状态栏成本为官方透传值';
+      note.style.display = 'block';
+    }
+    const trend = data.trend || {};
+    const trendCard = document.getElementById('trend-card');
+    if (trend.available && trend.days && trend.days.length) {
+      const bars = document.getElementById('trend-bars');
+      bars.innerHTML = '';
+      const max = Math.max(...trend.days.map(d => d.cost), 0.0001);
+      trend.days.forEach(d => {
+        const bar = document.createElement('div');
+        bar.style.width = '28px';
+        bar.style.height = Math.max(2, Math.round(d.cost / max * 60)) + 'px';
+        bar.style.background = '#4c8dff';
+        bar.style.borderRadius = '2px';
+        bar.title = d.day + ' $' + d.cost.toFixed(2);
+        bars.appendChild(bar);
+      });
+      trendCard.style.display = 'block';
+    } else {
+      trendCard.style.display = 'none';
     }
     document.getElementById('update-time').textContent = new Date().toLocaleTimeString();
 

@@ -111,7 +111,7 @@ fn run_pipeline(
     let now = state::now_secs();
     let mut cooldown = alert::AlertCooldown::from_state(&state.alerts);
     let fired = alert::check_alerts(&data, &config.alerts, &mut cooldown, now);
-    let (effective_cost, _) = pricing::effective_cost(data, &summary, &config.pricing);
+    let (effective_cost, _) = pricing::realtime_cost(data, &config.pricing);
     alert::send_notifications(
         &fired,
         &data,
@@ -119,6 +119,24 @@ fn run_pipeline(
         &config.currency_symbol,
         effective_cost,
     );
+    // ⑳ 预算档位：基于实时估算成本（≈），档位单调 + 冷却跨进程去重。
+    // 复用上方 realtime_cost 结果（effective_cost），不重复计算。
+    let budget_tier = alert::check_budget(
+        effective_cost,
+        &config.budget,
+        config.alerts.cooldown_minutes,
+        state.budget_tier,
+        &mut cooldown,
+        now,
+    );
+    if let Some(tier) = budget_tier {
+        state.budget_tier = tier;
+        crate::notify::budget(
+            (effective_cost / config.budget.cap_usd) * 100.0,
+            config.budget.cap_usd,
+            &config.currency_symbol,
+        );
+    }
     state.alerts = cooldown.to_state();
 
     // ⑨ 会话切换结账：transcript_path 变化 → 上一会话写入历史库（失败仅警告，不中断渲染）
@@ -213,7 +231,7 @@ pub fn render_with_data(
     registry: &WidgetRegistry,
     config: &AppConfig,
     theme: &Theme,
-    summary: Option<&TranscriptSummary>,
+    _summary: Option<&TranscriptSummary>,
 ) -> Result<String, String> {
     let layout = resolve_compact_layout(config)?;
     if layout.is_empty() {
@@ -249,7 +267,7 @@ pub fn render_with_data(
             .filter_map(|id| {
                 let w = registry.get(id)?;
                 let mut widget_config = config.widget_config(id);
-                pricing::inject_cost(data, summary, config, &mut widget_config);
+                pricing::inject_cost_realtime(data, config, &mut widget_config);
                 let rendered = w.render_compact(data, theme, &widget_config);
                 if rendered.is_empty() {
                     None
