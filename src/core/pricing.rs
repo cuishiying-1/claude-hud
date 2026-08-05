@@ -109,6 +109,38 @@ pub fn realtime_cost(data: &SessionData, pricing: &PricingTable) -> (f64, bool) 
     (data.cost.total_cost_usd, false)
 }
 
+/// ⑦ 工具级成本归因排行（估算路径：无逐工具 token）——
+/// per_call = (input×in_p + output×out_p + cache_read×cr_p + cache_creation×cc_p)
+/// ÷ 总调用数；tool[t] = per_call × calls[t]，成本降序。
+/// 模型未命中定价 → None（该段 `—`）；零调用或零 token → Some(空)。
+pub fn tool_cost_ranking(
+    summary: &TranscriptSummary,
+    pricing: &PricingTable,
+    model_id: &str,
+) -> Option<Vec<(String, usize, f64)>> {
+    let price = pricing.get(model_id)?;
+    let total_calls: usize = summary.tool_counts.values().sum();
+    if total_calls == 0 {
+        return Some(vec![]);
+    }
+    let t = &summary.total_tokens;
+    let total_cost = price.input * t.input as f64
+        + price.output * t.output as f64
+        + price.cache_read * t.cache_read as f64
+        + price.cache_creation * t.cache_created as f64;
+    if total_cost <= 0.0 {
+        return Some(vec![]);
+    }
+    let per_call = total_cost / total_calls as f64;
+    let mut rows: Vec<(String, usize, f64)> = summary
+        .tool_counts
+        .iter()
+        .map(|(tool, calls)| (tool.clone(), *calls, per_call * *calls as f64))
+        .collect();
+    rows.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    Some(rows)
+}
+
 /// 把 effective cost / 估算标记 / 币种注入 WidgetConfig。
 /// compact.rs 与 dashboard.rs 两条管线共用（widget 签名零改动）。
 pub fn inject_cost(
@@ -451,5 +483,68 @@ mod tests {
         let mut wc2 = WidgetConfig::default();
         inject_cost(&data, None, &AppConfig::default(), &mut wc2);
         assert!(!wc2.get_bool("pricing_configured", true));
+    }
+
+    fn summary_with_tools(tools: &[(&str, usize)], input: u64, output: u64) -> TranscriptSummary {
+        let mut s = TranscriptSummary::default();
+        s.tool_counts = tools
+            .iter()
+            .map(|(t, n)| (t.to_string(), *n))
+            .collect();
+        s.total_tokens = super::super::transcript::TokenTotal {
+            input,
+            output,
+            cache_read: 0,
+            cache_created: 0,
+        };
+        s
+    }
+
+    #[test]
+    fn ranking_sorts_desc_and_estimates() {
+        // Bash 3 + Read 2 + Skill 1 = 6 calls；input 600k output 300k；
+        // sonnet 价（3e-6/15e-6）→ 总成本 1.8 + 4.5 = 6.3 → per_call 1.05
+        let s = summary_with_tools(&[("Bash", 3), ("Read", 2), ("Skill", 1)], 600_000, 300_000);
+        let mut pricing = PricingTable::new();
+        pricing.insert(
+            "claude-sonnet-4-6".into(),
+            PriceEntry {
+                input: 3e-6,
+                output: 15e-6,
+                ..Default::default()
+            },
+        );
+        let rows = tool_cost_ranking(&s, &pricing, "claude-sonnet-4-6")
+            .expect("model priced");
+        assert_eq!(rows.len(), 3);
+        // 降序：Bash 3.15 > Read 2.10 > Skill 1.05
+        assert_eq!(rows[0].0, "Bash");
+        assert_eq!(rows[0].1, 3);
+        assert!((rows[0].2 - 3.15).abs() < 1e-9);
+        assert_eq!(rows[1].0, "Read");
+        assert!((rows[1].2 - 2.10).abs() < 1e-9);
+        assert_eq!(rows[2].0, "Skill");
+        assert!((rows[2].2 - 1.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ranking_unknown_model_returns_none() {
+        let s = summary_with_tools(&[("Bash", 3)], 600_000, 300_000);
+        let rows = tool_cost_ranking(&s, &PricingTable::new(), "deepseek-v4-flash");
+        assert!(rows.is_none());
+    }
+
+    #[test]
+    fn ranking_zero_calls_returns_empty() {
+        let s = summary_with_tools(&[], 600_000, 300_000);
+        let rows = tool_cost_ranking(&s, &builtin_pricing(), "claude-sonnet-4-6");
+        assert_eq!(rows, Some(vec![]));
+    }
+
+    #[test]
+    fn ranking_zero_tokens_returns_empty() {
+        let s = summary_with_tools(&[("Bash", 3)], 0, 0);
+        let rows = tool_cost_ranking(&s, &builtin_pricing(), "claude-sonnet-4-6");
+        assert_eq!(rows, Some(vec![]));
     }
 }

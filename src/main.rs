@@ -64,6 +64,23 @@ enum Commands {
         #[arg(long)]
         weekly: bool,
     },
+    /// List recorded sessions (paginated)
+    Sessions {
+        /// Maximum number of sessions to list
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Skip the first N sessions
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Only sessions started on or after this date (YYYY-MM-DD)
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// Show details for a single session
+    Session {
+        /// Session id
+        id: String,
+    },
     /// Upgrade checks
     Update {
         #[command(subcommand)]
@@ -204,6 +221,10 @@ fn main() {
         Commands::Widget(cmd) => handle_widget(cmd, &registry, lang),
         Commands::Completion { shell } => generate_completion(&shell, lang),
         Commands::History { weekly } => run_history(&config, weekly, lang),
+        Commands::Sessions { limit, offset, date } => {
+            run_sessions(&config, limit, offset, date.as_deref(), lang)
+        }
+        Commands::Session { id } => run_session(&config, &id, lang),
         Commands::Update { cmd } => match cmd {
             UpdateCommands::Check => {
                 let status = core::update::check_update();
@@ -263,6 +284,16 @@ fn inject_help(cmd: clap::Command, lang: crate::core::i18n::Language) -> clap::C
         .mut_subcommand("history", |c| {
             c.about(tr(lang, "cli.history"))
                 .mut_arg("weekly", |a| a.help(tr(lang, "cli.history_weekly")))
+        })
+        .mut_subcommand("sessions", |c| {
+            c.about(tr(lang, "cli.sessions"))
+                .mut_arg("limit", |a| a.help(tr(lang, "cli.sessions_limit")))
+                .mut_arg("offset", |a| a.help(tr(lang, "cli.sessions_offset")))
+                .mut_arg("date", |a| a.help(tr(lang, "cli.sessions_date")))
+        })
+        .mut_subcommand("session", |c| {
+            c.about(tr(lang, "cli.session"))
+                .mut_arg("id", |a| a.help(tr(lang, "cli.session_id")))
         })
         .mut_subcommand("update", |c| {
             c.about(tr(lang, "cli.update"))
@@ -951,6 +982,127 @@ fn run_history(
         for (day, cost) in trend {
             println!("  {}  {}{:.2}", day, symbol, cost);
         }
+    }
+    Ok(())
+}
+
+/// ⑤ `sessions`：分页会话列表。空库显示 —；行格式与 history 列表一致。
+fn run_sessions(
+    config: &AppConfig,
+    limit: usize,
+    offset: usize,
+    date_from: Option<&str>,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
+    let store = HistoryStore::open()?;
+    println!("{}", tr(lang, "runtime.h_sessions_title"));
+    let symbol = &config.currency_symbol;
+    let rows = store.sessions_page(limit, offset, date_from)?;
+    if rows.is_empty() {
+        println!("  —");
+    } else {
+        for r in rows {
+            println!(
+                "{}",
+                tr(lang, "runtime.h_session_line")
+                    .replace("{id}", &r.id.to_string())
+                    .replace("{start}", &r.started_at)
+                    .replace("{sym}", symbol)
+                    .replace("{cost}", &format!("{:.2}", r.total_cost_usd))
+                    .replace("{dur}", &format_history_duration(r.duration_secs))
+                    .replace("{n}", &r.agent_count.to_string())
+                    .replace("{tok}", &format_history_tokens(r.total_tokens))
+            );
+        }
+    }
+    Ok(())
+}
+
+/// ⑥ `session <id>`：单会话详情。transcript_path 存在 → 尾读补充
+/// token 分解/代理列表/工具成本排行；未找到 → 明确报错（exit 1）。
+fn run_session(
+    config: &AppConfig,
+    id: &str,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
+    let store = HistoryStore::open()?;
+    let sid: i64 = id.parse()
+        .map_err(|_| tr(lang, "runtime.h_session_not_found").replace("{id}", id))?;
+    let Some(r) = store.session_by_id(sid)? else {
+        return Err(tr(lang, "runtime.h_session_not_found").replace("{id}", id));
+    };
+    let symbol = &config.currency_symbol;
+    println!("{}", tr(lang, "runtime.h_session_title").replace("{id}", &r.id.to_string()));
+    println!("{}", tr(lang, "runtime.h_session_model").replace("{model}", &r.model));
+    println!(
+        "{}",
+        tr(lang, "runtime.h_session_cost")
+            .replace("{sym}", symbol)
+            .replace("{cost}", &format!("{:.2}", r.total_cost_usd))
+    );
+    println!(
+        "{}",
+        tr(lang, "runtime.h_session_duration")
+            .replace("{dur}", &format_history_duration(r.duration_secs))
+    );
+    println!(
+        "{}",
+        tr(lang, "runtime.h_session_agents").replace("{n}", &r.agent_count.to_string())
+    );
+    let tokens = format_history_tokens(r.total_tokens);
+    let summary = match r.transcript_path.as_deref() {
+        Some(path) if std::path::Path::new(path).exists() => {
+            Some(crate::core::transcript::TranscriptReader::new(path.into()).read_updates())
+        }
+        _ => None,
+    };
+    match &summary {
+        Some(s) => {
+            println!(
+                "{}",
+                tr(lang, "runtime.h_session_tokens")
+                    .replace("{tok}", &tokens)
+                    .replace("{in}", &s.total_tokens.input.to_string())
+                    .replace("{out}", &s.total_tokens.output.to_string())
+            );
+            println!("{}", tr(lang, "runtime.h_session_agent_list"));
+            for a in &s.agents {
+                println!(
+                    "{}",
+                    tr(lang, "runtime.h_session_agent_line")
+                        .replace("{name}", &a.name)
+                        .replace("{calls}", &a.tool_calls.to_string())
+                );
+            }
+        }
+        None => {
+            println!(
+                "{}",
+                tr(lang, "runtime.h_session_tokens_plain").replace("{tok}", &tokens)
+            );
+        }
+    }
+    println!("{}", tr(lang, "runtime.h_tools_title"));
+    match summary.as_ref().and_then(|s| {
+        crate::core::pricing::tool_cost_ranking(
+            s,
+            &crate::core::pricing::merged_pricing(config),
+            &r.model,
+        )
+    }) {
+        Some(rows) if !rows.is_empty() => {
+            for (tool, calls, cost) in rows.iter().take(5) {
+                println!(
+                    "{}",
+                    tr(lang, "runtime.h_tool_line")
+                        .replace("{tool}", tool)
+                        .replace("{n}", &calls.to_string())
+                        .replace("{sym}", symbol)
+                        .replace("{cost}", &format!("{:.2}", cost))
+                );
+            }
+        }
+        _ => println!("{}", tr(lang, "runtime.h_tools_empty")),
     }
     Ok(())
 }

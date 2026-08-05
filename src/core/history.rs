@@ -16,6 +16,8 @@ pub struct SessionRecord {
     pub total_cost_usd: f64,
     pub total_tokens: u64,
     pub agent_count: usize,
+    pub model: String,
+    pub transcript_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -63,10 +65,40 @@ impl HistoryStore {
                     agent_count INTEGER NOT NULL DEFAULT 0,
                     lines_added INTEGER NOT NULL DEFAULT 0,
                     lines_removed INTEGER NOT NULL DEFAULT 0,
-                    mod_used TEXT NOT NULL DEFAULT ''
+                    mod_used TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    transcript_path TEXT NOT NULL DEFAULT ''
                 );",
             )
-            .map_err(|e| format!("create table: {}", e))
+            .map_err(|e| format!("create table: {}", e))?;
+        self.migrate()?;
+        Ok(())
+    }
+
+    /// 旧库补列（model / transcript_path）：PRAGMA 检查 → ALTER ADD COLUMN。
+    /// 新库 CREATE TABLE 已含新列，此路径为空操作。
+    fn migrate(&self) -> Result<(), String> {
+        let cols: Vec<String> = self
+            .conn
+            .prepare("PRAGMA table_info(sessions)")
+            .map_err(|e| format!("pragma: {}", e))?
+            .query_map([], |row| row.get(1))
+            .map_err(|e| format!("pragma row: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !cols.iter().any(|c| c == "model") {
+            self.conn
+                .execute_batch("ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT ''")
+                .map_err(|e| format!("add model column: {}", e))?;
+        }
+        if !cols.iter().any(|c| c == "transcript_path") {
+            self.conn
+                .execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN transcript_path TEXT NOT NULL DEFAULT ''",
+                )
+                .map_err(|e| format!("add transcript_path column: {}", e))?;
+        }
+        Ok(())
     }
 
     fn db_path() -> Result<PathBuf, String> {
@@ -90,9 +122,17 @@ impl HistoryStore {
 
         self.conn
             .execute(
-                "INSERT INTO sessions (duration_secs, total_cost_usd, total_tokens, agent_count)
-                 VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![dur_secs, data.cost.total_cost_usd, total_tokens, agent_count],
+                "INSERT INTO sessions (duration_secs, total_cost_usd, total_tokens, agent_count,
+                                       model, transcript_path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    dur_secs,
+                    data.cost.total_cost_usd,
+                    total_tokens,
+                    agent_count,
+                    data.model.id,
+                    data.transcript_path.as_deref().unwrap_or("")
+                ],
             )
             .map_err(|e| format!("insert session: {}", e))?;
 
@@ -130,7 +170,8 @@ impl HistoryStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, started_at, duration_secs, total_cost_usd, total_tokens, agent_count
+                "SELECT id, started_at, duration_secs, total_cost_usd, total_tokens, agent_count,
+                        model, transcript_path
                  FROM sessions ORDER BY id DESC LIMIT ?1",
             )
             .map_err(|e| format!("prepare: {}", e))?;
@@ -144,6 +185,15 @@ impl HistoryStore {
                     total_cost_usd: row.get(3)?,
                     total_tokens: row.get::<_, i64>(4)? as u64,
                     agent_count: row.get::<_, i64>(5)? as usize,
+                    model: row.get(6)?,
+                    transcript_path: {
+                        let s: String = row.get(7)?;
+                        if s.is_empty() {
+                            None
+                        } else {
+                            Some(s)
+                        }
+                    },
                 })
             })
             .map_err(|e| format!("query: {}", e))?
@@ -151,6 +201,86 @@ impl HistoryStore {
             .collect();
 
         Ok(rows)
+    }
+
+    /// ⑤ sessions 分页列表：id 降序，可选起始日期过滤（YYYY-MM-DD 前缀比较）。
+    pub fn sessions_page(
+        &self,
+        limit: usize,
+        offset: usize,
+        date_from: Option<&str>,
+    ) -> Result<Vec<SessionRecord>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, started_at, duration_secs, total_cost_usd, total_tokens, agent_count,
+                        model, transcript_path
+                 FROM sessions
+                 WHERE (?1 IS NULL OR started_at >= ?1)
+                 ORDER BY id DESC LIMIT ?2 OFFSET ?3",
+            )
+            .map_err(|e| format!("prepare: {}", e))?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![date_from, limit as i64, offset as i64],
+                |row| {
+                    Ok(SessionRecord {
+                        id: row.get(0)?,
+                        started_at: row.get(1)?,
+                        duration_secs: row.get(2)?,
+                        total_cost_usd: row.get(3)?,
+                        total_tokens: row.get::<_, i64>(4)? as u64,
+                        agent_count: row.get::<_, i64>(5)? as usize,
+                        model: row.get(6)?,
+                        transcript_path: {
+                            let s: String = row.get(7)?;
+                            if s.is_empty() {
+                                None
+                            } else {
+                                Some(s)
+                            }
+                        },
+                    })
+                },
+            )
+            .map_err(|e| format!("query: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// ⑥ 单会话详情：按主键查，无 → None。
+    pub fn session_by_id(&self, id: i64) -> Result<Option<SessionRecord>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, started_at, duration_secs, total_cost_usd, total_tokens, agent_count,
+                        model, transcript_path
+                 FROM sessions WHERE id = ?1",
+            )
+            .map_err(|e| format!("prepare: {}", e))?;
+        let mut rows = stmt
+            .query_map([id], |row| {
+                Ok(SessionRecord {
+                    id: row.get(0)?,
+                    started_at: row.get(1)?,
+                    duration_secs: row.get(2)?,
+                    total_cost_usd: row.get(3)?,
+                    total_tokens: row.get::<_, i64>(4)? as u64,
+                    agent_count: row.get::<_, i64>(5)? as usize,
+                    model: row.get(6)?,
+                    transcript_path: {
+                        let s: String = row.get(7)?;
+                        if s.is_empty() {
+                            None
+                        } else {
+                            Some(s)
+                        }
+                    },
+                })
+            })
+            .map_err(|e| format!("query: {}", e))?;
+        rows.next().transpose().map_err(|e| format!("row: {}", e))
     }
 
     /// Get daily cost trend for the last 7 days.
@@ -244,5 +374,95 @@ mod tests {
         assert_eq!(r.total_tokens, 0);
         assert_eq!(r.longest_duration_secs, 0);
         assert!((r.highest_cost_usd - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sessions_page_orders_desc_and_limits() {
+        let store = mem_store();
+        store.record_session(&session(1.0, 1000, 500, 60_000), 1).unwrap();
+        store.record_session(&session(2.0, 2000, 800, 120_000), 2).unwrap();
+        store.record_session(&session(3.0, 3000, 900, 180_000), 3).unwrap();
+        let page = store.sessions_page(2, 0, None).unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].id, 3);
+        assert_eq!(page[1].id, 2);
+    }
+
+    #[test]
+    fn sessions_page_offset_skips() {
+        let store = mem_store();
+        store.record_session(&session(1.0, 1000, 500, 60_000), 1).unwrap();
+        store.record_session(&session(2.0, 2000, 800, 120_000), 2).unwrap();
+        let page = store.sessions_page(10, 1, None).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, 1);
+    }
+
+    #[test]
+    fn sessions_page_date_filter() {
+        let store = mem_store();
+        store.record_session(&session(1.0, 1000, 500, 60_000), 1).unwrap();
+        // started_at 默认 now；把两条会话改成不同日期再过滤
+        store
+            .conn
+            .execute("UPDATE sessions SET started_at = '2026-08-01 10:00:00' WHERE id = 1", [])
+            .unwrap();
+        store.record_session(&session(2.0, 2000, 800, 120_000), 2).unwrap();
+        store
+            .conn
+            .execute("UPDATE sessions SET started_at = '2026-08-04 10:00:00' WHERE id = 2", [])
+            .unwrap();
+        let page = store.sessions_page(10, 0, Some("2026-08-03")).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, 2);
+        // 未来日期 → 空
+        let none = store.sessions_page(10, 0, Some("2099-01-01")).unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn session_by_id_found_and_missing() {
+        let store = mem_store();
+        store.record_session(&session(1.5, 1000, 500, 60_000), 2).unwrap();
+        let found = store.session_by_id(1).unwrap().expect("id 1 exists");
+        assert_eq!(found.id, 1);
+        assert!((found.total_cost_usd - 1.5).abs() < 1e-9);
+        assert_eq!(found.agent_count, 2);
+        assert!(store.session_by_id(99).unwrap().is_none());
+    }
+
+    #[test]
+    fn record_session_stores_model_and_transcript_path() {
+        let store = mem_store();
+        let mut d = session(1.0, 1000, 500, 60_000);
+        d.model.id = "claude-sonnet-4-6".into();
+        d.transcript_path = Some("/tmp/x.jsonl".into());
+        store.record_session(&d, 1).unwrap();
+        let r = store.session_by_id(1).unwrap().expect("recorded");
+        assert_eq!(r.model, "claude-sonnet-4-6");
+        assert_eq!(r.transcript_path.as_deref(), Some("/tmp/x.jsonl"));
+    }
+
+    #[test]
+    fn legacy_schema_migrates_new_columns() {
+        // 旧库：sessions 表无 model/transcript_path 列 → init_schema 后列补齐
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                duration_secs INTEGER NOT NULL DEFAULT 0,
+                total_cost_usd REAL NOT NULL DEFAULT 0.0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
+                agent_count INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+        let store = HistoryStore { conn };
+        store.init_schema().unwrap();
+        store.record_session(&session(1.0, 1000, 500, 60_000), 1).unwrap();
+        let r = store.session_by_id(1).unwrap().expect("works after migrate");
+        assert_eq!(r.model, "m");
+        assert!(r.transcript_path.is_none());
     }
 }

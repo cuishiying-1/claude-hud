@@ -1415,7 +1415,145 @@ def b5_cases():
     ]
 
 
+def b6_cases():
+    """批次 II ⑤⑥⑦：sessions 分页列表 + session 详情 + 工具成本排行。"""
+    list_cfg = DEFAULT_CONFIG
+    pre3 = [
+        {"args": ["render"], "stdin": j(full_dict(**{"transcript_path": "/a.jsonl"}))},
+        {"args": ["render"], "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+        {"args": ["render"], "stdin": j(full_dict(**{"transcript_path": "/c.jsonl"}))},
+    ]
+    pre_detail = [
+        {"args": ["render"],
+         "stdin": j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                  "transcript_path": fx("transcript/timestamps.jsonl")}))},
+        {"args": ["render"],
+         "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+    ]
+    pre_rank = [
+        {"args": ["render"],
+         "stdin": j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                  "transcript_path": fx("transcript/tools.jsonl")}))},
+        {"args": ["render"],
+         "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+    ]
+    return [
+        render_case(
+            "B6-01", "⑤ sessions 列表（2 条结账）", "batch2",
+            {"exit": 0, "stdout_contains": ["Sessions:", "#2", "#1", "agents"]},
+            args=["sessions"], config=list_cfg, pre_cmds=pre3,
+            remove_db=True, remove_state=True,
+            note="A→B→C 结账 2 条 → 列表 id 降序 #2 #1"),
+        render_case(
+            "B6-02", "⑤ sessions 分页 --limit 1", "batch2",
+            {"exit": 0, "stdout_contains": ["#2"], "stdout_not_contains": ["#1"]},
+            args=["sessions", "--limit", "1"], config=list_cfg, pre_cmds=pre3,
+            remove_db=True, remove_state=True,
+            note="limit=1 → 只含最新 #2"),
+        render_case(
+            "B6-03", "⑤ sessions 日期过滤无命中", "batch2",
+            {"exit": 0, "stdout_contains": ["—"]},
+            args=["sessions", "--date", "2099-01-01"], config=list_cfg, pre_cmds=pre3,
+            remove_db=True, remove_state=True,
+            note="未来日期 → 空列表显示 —（started_at 为真实 now）"),
+        render_case(
+            "B6-04", "⑤ sessions 空库 —", "batch2",
+            {"exit": 0, "stdout_contains": ["Sessions:", "—"]},
+            args=["sessions"], config=DEFAULT_CONFIG,
+            remove_db=True,
+            note="空库列表显示 —"),
+        render_case(
+            "B6-05", "⑤ sessions zh 表头", "batch2",
+            {"exit": 0, "stdout_contains": ["会话列表："]},
+            args=["sessions"], config=DEFAULT_CONFIG,
+            env_extra={"CLAUDE_HUD_CONFIG": fx("config/i18n_zh.toml")},
+            remove_db=True,
+            note="zh locale 标题"),
+        render_case(
+            "B6-06", "⑥ session 详情（模型 + transcript 尾读明细）", "batch2",
+            {"exit": 0,
+             "stdout_contains": ["Session #1:", "Model: claude-sonnet-4-6",
+                                 "Agents:", "alpha", "Tools (est.):",
+                                 "Bash · 1 calls", "Read · 1 calls"]},
+            args=["session", "1"], config=DEFAULT_CONFIG,
+            pre_cmds=pre_detail,
+            remove_db=True, remove_state=True,
+            note="A(timestamps)→B 结账 A：模型入库 + 尾读工具明细"),
+        render_case(
+            "B6-07", "⑥ session 不存在 → exit 1", "batch2",
+            {"exit": 1, "stderr_contains": ["Session 99 not found"]},
+            args=["session", "99"], config=DEFAULT_CONFIG,
+            pre_cmds=pre_detail,
+            remove_db=True, remove_state=True,
+            note="未找到 id → 明确报错（exit 1 + stderr）"),
+        render_case(
+            "B6-08", "⑥ session 空库 → exit 1", "batch2",
+            {"exit": 1, "stderr_contains": ["Session 1 not found"]},
+            args=["session", "1"], config=DEFAULT_CONFIG,
+            remove_db=True,
+            note="空库详情 → 未找到报错"),
+        render_case(
+            "B6-09", "⑥ session 无 transcript → 简化详情", "batch2",
+            {"exit": 0,
+             "stdout_contains": ["Session #1:", "Tokens:",
+                                 "Tools (est.):", "—"],
+             "stdout_not_contains": ["calls"]},
+            args=["session", "1"], config=DEFAULT_CONFIG,
+            pre_cmds=[
+                {"args": ["render"],
+                 "stdin": j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                          "transcript_path": "/a.jsonl"}))},
+                {"args": ["render"],
+                 "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+            ],
+            remove_db=True, remove_state=True,
+            note="transcript_path /a.jsonl 不存在 → 无尾读：Token 总量 + 排行 —"),
+        render_case(
+            "B6-10", "⑦ 工具成本排行降序（tools fixture）", "batch2",
+            {"exit": 0,
+             "stdout_contains": ["Tools (est.):",
+                                 "Bash · 3 calls · ≈$3.15",
+                                 "Read · 2 calls · ≈$2.10"],
+             "stdout_regex": r"Bash · 3 calls[\s\S]*Read · 2 calls"},
+            args=["session", "1"], config=DEFAULT_CONFIG,
+            pre_cmds=pre_rank,
+            remove_db=True, remove_state=True,
+            note="600k/300k ÷ 6 calls → per_call 1.05；Bash 3.15 居首（regex 断言顺序）"),
+        render_case(
+            "B6-11", "⑦ 零工具 transcript → 排行 —", "batch2",
+            {"exit": 0,
+             "stdout_contains": ["Tools (est.):", "—"],
+             "stdout_not_contains": ["calls"]},
+            args=["session", "1"], config=DEFAULT_CONFIG,
+            pre_cmds=[
+                {"args": ["render"],
+                 "stdin": j(full_dict(**{"model": {"id": "claude-sonnet-4-6", "display_name": "Sonnet"},
+                                          "transcript_path": fx("transcript/token_rate.jsonl")}))},
+                {"args": ["render"],
+                 "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+            ],
+            remove_db=True, remove_state=True,
+            note="token_rate.jsonl 只有 assistant 无工具 → 零调用 → —"),
+        render_case(
+            "B6-12", "⑦ 模型未命中定价 → 排行 —", "batch2",
+            {"exit": 0,
+             "stdout_contains": ["Tools (est.):", "—"],
+             "stdout_not_contains": ["calls"]},
+            args=["session", "1"], config=DEFAULT_CONFIG,
+            pre_cmds=[
+                {"args": ["render"],
+                 "stdin": j(full_dict(**{"model": {"id": "deepseek-v4-flash", "display_name": "DeepSeek"},
+                                          "transcript_path": fx("transcript/tools.jsonl")}))},
+                {"args": ["render"],
+                 "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+            ],
+            remove_db=True, remove_state=True,
+            note="deepseek-v4-flash 不在内置表 → 未命中 → —（诚实降级）"),
+    ]
+
+
 CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7 \
-    + b1_cases() + b2_cases() + b3_cases() + b4_cases() + b5_cases()
-# 156 + 3（B1-01..03）+ 1（B2-01）+ 2（B3-01/02）+ 3（B4-01/02/03）+ 3（B5-01/02/03）= 168
-assert len(CASES) == 168, f"expected 168 cases, got {len(CASES)}"
+    + b1_cases() + b2_cases() + b3_cases() + b4_cases() + b5_cases() + b6_cases()
+# 156 + 3（B1-01..03）+ 1（B2-01）+ 2（B3-01/02）+ 3（B4-01/02/03）+ 3（B5-01/02/03）
+#   + 12（B6-01..12 ⑤⑥⑦ 列表/详情/排行）= 180
+assert len(CASES) == 180, f"expected 180 cases, got {len(CASES)}"

@@ -7,6 +7,7 @@
 - 批次 III 布局补全：agent-centric / kpi / contextual 三个出厂布局真实实现（此前 obsidian-command / ember-night / noir-tabbed 切换即报 `layout not implemented`）；contextual 按 subagent 活跃度动态切换 widget 集
 - 批次 I 成本与预测：① 内置模型价格库（9 模型 2026-07 官方价，用户 `[pricing]` 覆盖，doctor 报告覆盖数）；② 实时成本 cache 权重修正（cache_read/cache_creation 字段 × 单价，无 cache 数据回归不变）；③ cost_display 成本速率段 `· ≈$X.X/h`（零时长/零成本隐藏）；④ context_bar 压缩预测标注 `compact ≈Nm`（transcript 首尾桶斜率外推）+ `[alerts] compaction_eta_minutes` 临近通知（默认 15，0=关，复用冷却去重）
 - 批次 V ⑮ 卡顿归因：AgentRecord 记录最后工具名（`last_tool_name`，serde default 旧 state 兼容）；agent_detail 卡顿标记升级为 `stalled 3m15s · bash` 归因文本（danger 色，无工具记录维持原 elapsed）；alerts 卡顿行同步归因；不可靠时间轴不假告警
+- 批次 II 会话复盘与浏览：⑤ `sessions` 分页列表（--limit/--offset/--date）；⑥ `session <id>` 详情（model/transcript_path 入库 migration + transcript 尾读补 token 分解/代理明细）；⑦ 工具成本归因排行（估算路径 per_call 均摊，`≈` 标注，模型未命中 `—` 诚实降级）；黑盒 180 例
 
 ## [0.6.0] - 2026-08-04 (v0.4 视觉批次)
 

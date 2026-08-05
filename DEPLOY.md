@@ -121,6 +121,19 @@ Daily cost (last 7 days):
 
 记录时机：仪表盘 `q`/`Esc` 退出，以及紧凑模式 render 检测到 `transcript_path` 切换（上一会话结束）时自动写入。
 
+### 会话浏览（⑤⑥⑦，v0.6）
+
+```bash
+claude-hud sessions                 # 分页列表（默认 10 条，id 降序）
+claude-hud sessions --limit 20 --offset 10   # 分页
+claude-hud sessions --date 2026-08-01        # 仅此日期之后开始的会话
+claude-hud session 42                        # 单会话详情
+```
+
+- `session <id>` 详情：模型 / 成本 / 时长 / 代理数 / token 总量；`transcript_path` 存在时尾读 transcript 补充输入输出 token 分解与代理明细；未找到 id → stderr 报错 + exit 1。
+- **工具成本排行（估算口径）**：无逐工具 token 数据 → per_call 均摊估算（总成本 ÷ 总调用数 × 各工具调用数），行首带 `≈` 标注；模型未命中内置/用户 `[pricing]` 或零调用/零 token 时显示 `—`（诚实降级）。
+- 历史库自 0.6 起新增 `model` / `transcript_path` 两列（旧库首次打开自动 ALTER TABLE 补齐，无需迁移操作）。
+
 ### 状态栏成本双轨（⑲）
 
 状态栏成本有两条计算路径：
@@ -214,6 +227,9 @@ critical_threshold = "95"
 [widgets.cost_display]
 currency_symbol = "¥"
 warn_threshold_usd = "10.0"
+show_tokens = "false"        # token 数（Xk in / Xk out tok）展示开关：显式设置时优先；
+                             # 未设置时布局含 context_bar 自动隐藏（去重），
+                             # 无 context_bar 的极简布局默认显示
 
 [widgets.agent_overview]
 stall_threshold_sec = "30"
