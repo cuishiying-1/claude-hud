@@ -220,11 +220,14 @@ def run_one(exe_path, case, tmp_dir):
     elif case["run_kind"] in ("serve", "dashboard"):
         runner.write_config(cases.DEFAULT_CONFIG)
 
-    # P4 ⑨：可选清空 history.db（必须在任何 checkout 渲染之前）
+    # P4 ⑨：可选清空 history.db（必须在任何 checkout 渲染之前）。
+    # 连同 -wal/-shm/-journal 兄弟文件一起删：stale journal 会把旧行
+    # 恢复到新库，导致 session 编号偏移（B6-02 偶发失败根因）。
     if case.get("remove_db"):
         db_path = os.path.join(runner.HUD_DIR, "history.db")
-        if os.path.isfile(db_path):
-            os.remove(db_path)
+        for p in [db_path] + [db_path + s for s in ("-wal", "-shm", "-journal")]:
+            if os.path.isfile(p):
+                os.remove(p)
 
     # ⑨+：可选清空 state.json —— checkout_billed 去重表跨进程持久，
     # 上一用例残留会挡本用例结账（必须在任何 checkout 渲染之前）。

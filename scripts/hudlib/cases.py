@@ -25,6 +25,8 @@ P1-only keys (passed through render_case's **extra):
                              min/equals 的值可为 "<FIXTURE_SIZE>" 运行期替换）
   pre_state_json (dict)   -- 对 pre_render 之后的 state.json 做 check_state_json
   state_json_same_as_pre (list[str]) -- 这些点路径在主运行前后必须不变
+  上述三个 state 键也可嵌套在 spec 里（旧写法），render_case 会自动提升到顶层；
+  读端（run_one/_apply_fixture_ops）只认顶层，spec 嵌套是死代码。
   config_file_contains (list[str]) -- 主运行后 HUD_DIR/config.toml 必须包含所有子串
 """
 import json
@@ -94,6 +96,11 @@ def render_case(cid, name, dim, spec, args=None, stdin=None, stdin_file=None,
             "spec": spec, "run_kind": "render",
             "pre_cmds": pre_cmds or [], "note": note}
     case.update(extra)
+    # state 断言键读端（test_hud.run_one/_apply_fixture_ops）只在顶层读取；
+    # 允许写进 spec 的旧写法，此处提升到顶层使断言真正生效。
+    for k in ("state_json", "pre_state_json", "state_json_same_as_pre"):
+        if k in spec:
+            case.setdefault(k, spec[k])
     return case
 
 
