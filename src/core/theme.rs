@@ -114,7 +114,7 @@ pub enum IconSet {
 }
 
 impl Theme {
-    /// Return the 6 built-in preset names.
+    /// Return the 10 built-in preset names.
     pub fn preset_names() -> &'static [&'static str] {
         &[
             "dracula",
@@ -123,6 +123,10 @@ impl Theme {
             "catppuccin",
             "monochrome",
             "solarized-dark",
+            "gruvbox-dark",
+            "one-dark",
+            "github-dark",
+            "palenight",
         ]
     }
 
@@ -135,6 +139,10 @@ impl Theme {
             "catppuccin" => Some(Self::catppuccin()),
             "monochrome" => Some(Self::monochrome()),
             "solarized-dark" => Some(Self::solarized_dark()),
+            "gruvbox-dark" => Some(Self::gruvbox_dark()),
+            "one-dark" => Some(Self::one_dark()),
+            "github-dark" => Some(Self::github_dark()),
+            "palenight" => Some(Self::palenight()),
             _ => None,
         }
     }
@@ -207,6 +215,54 @@ impl Theme {
             muted: "#586e75".into(), border: "#073642".into(),
             skill_color: "#d33682".into(), mcp_color: "#cb4b16".into(),
             model_color: "#268bd2".into(),
+            ..Default::default()
+        }
+    }
+
+    fn gruvbox_dark() -> Self {
+        Self {
+            bg: "#282828".into(), fg: "#ebdbb2".into(),
+            accent: "#fabd2f".into(), success: "#b8bb26".into(),
+            warning: "#d79921".into(), danger: "#fb4934".into(),
+            muted: "#928374".into(), border: "#3c3836".into(),
+            skill_color: "#d3869b".into(), mcp_color: "#8ec07c".into(),
+            model_color: "#83a598".into(),
+            ..Default::default()
+        }
+    }
+
+    fn one_dark() -> Self {
+        Self {
+            bg: "#282c34".into(), fg: "#abb2bf".into(),
+            accent: "#61afef".into(), success: "#98c379".into(),
+            warning: "#e5c07b".into(), danger: "#e06c75".into(),
+            muted: "#5c6370".into(), border: "#3e4451".into(),
+            skill_color: "#c678dd".into(), mcp_color: "#56b6c2".into(),
+            model_color: "#61afef".into(),
+            ..Default::default()
+        }
+    }
+
+    fn github_dark() -> Self {
+        Self {
+            bg: "#0d1117".into(), fg: "#c9d1d9".into(),
+            accent: "#58a6ff".into(), success: "#3fb950".into(),
+            warning: "#d29922".into(), danger: "#f85149".into(),
+            muted: "#8b949e".into(), border: "#21262d".into(),
+            skill_color: "#bc8cff".into(), mcp_color: "#39c5cf".into(),
+            model_color: "#58a6ff".into(),
+            ..Default::default()
+        }
+    }
+
+    fn palenight() -> Self {
+        Self {
+            bg: "#292d3e".into(), fg: "#a6accd".into(),
+            accent: "#82aaff".into(), success: "#c3e88d".into(),
+            warning: "#ffcb6b".into(), danger: "#f07178".into(),
+            muted: "#676e95".into(), border: "#32374d".into(),
+            skill_color: "#c792ea".into(), mcp_color: "#89ddff".into(),
+            model_color: "#82aaff".into(),
             ..Default::default()
         }
     }
@@ -352,6 +408,41 @@ mod tests {
             toml::from_str("bar_filled = \"■\"\n").unwrap();
         apply_theme_keys(&mut base, &keys);
         assert_eq!(base.bar_filled, '■');
+    }
+
+    #[test]
+    fn preset_names_has_ten_with_four_new() {
+        let names = Theme::preset_names();
+        assert_eq!(names.len(), 10);
+        for n in ["gruvbox-dark", "one-dark", "github-dark", "palenight"] {
+            assert!(names.contains(&n), "missing preset {}", n);
+        }
+    }
+
+    #[test]
+    fn new_presets_load_with_expected_colors() {
+        let cases = [
+            ("gruvbox-dark", "#282828", "#ebdbb2", "#fabd2f"),
+            ("one-dark", "#282c34", "#abb2bf", "#61afef"),
+            ("github-dark", "#0d1117", "#c9d1d9", "#58a6ff"),
+            ("palenight", "#292d3e", "#a6accd", "#82aaff"),
+        ];
+        for (name, bg, fg, accent) in cases {
+            let t = Theme::load_preset(name).expect("preset loads");
+            assert_eq!(t.bg, bg, "{} bg", name);
+            assert_eq!(t.fg, fg, "{} fg", name);
+            assert_eq!(t.accent, accent, "{} accent", name);
+        }
+    }
+
+    #[test]
+    fn new_presets_not_placeholder_defaults() {
+        let def = Theme::default();
+        for name in ["gruvbox-dark", "one-dark", "github-dark", "palenight"] {
+            let t = Theme::load_preset(name).unwrap();
+            assert_ne!(t.bg, def.bg, "{} is placeholder", name);
+            assert_ne!(t.accent, def.accent, "{} is placeholder", name);
+        }
     }
 }
 

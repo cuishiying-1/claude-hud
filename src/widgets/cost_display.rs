@@ -72,14 +72,23 @@ impl Widget for CostDisplay {
         let warn = config.get_f64("warn_threshold_usd", 10.0);
         let color = if cost >= warn { &theme.warning } else { &theme.success };
         let prefix = if estimated { "≈" } else { "" };
-        let mut group = format!(
-            "{}{}{:.2} · {}/{} tok",
-            prefix,
-            symbol,
-            cost,
-            format_tokens(t_in),
-            format_tokens(t_out)
-        );
+        // token 段与 context_bar 同屏时重复（context_bar 已展示用量）。
+        // 显式 show_tokens 键优先；未配置时布局含 context_bar 自动隐藏，
+        // 无 context_bar 的极简布局保持默认开。
+        let show_tokens = match config.values.get("show_tokens") {
+            Some(v) => v == "true",
+            None => !config.context_bar_present,
+        };
+        let mut group = format!("{}{}{:.2}", prefix, symbol, cost);
+        if show_tokens {
+            // 输入/输出标注（与 context_bar 同 key，避免裸 X/Y tok 语义不明）
+            group.push_str(&format!(
+                " · {}",
+                crate::core::i18n::tr(config.lang, "widget.tokens_in_out")
+                    .replace("{in}", &format_tokens(t_in))
+                    .replace("{out}", &format_tokens(t_out))
+            ));
+        }
         // ③ 成本速率：成本 ÷ 活跃时长（小时）。零时长/零成本 → 不显示（诚实降级）。
         let duration_ms = data.cost.total_duration_ms;
         if cost > 0.0 && duration_ms > 0 {
@@ -158,7 +167,14 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             lang: crate::core::i18n::Language::En,
+            context_bar_present: false,
         }
+    }
+
+    fn cfg_with_layout(extra: &[(&str, &str)], context_bar_present: bool) -> WidgetConfig {
+        let mut c = cfg(extra);
+        c.context_bar_present = context_bar_present;
+        c
     }
 
     fn session_with_duration(ms: u64) -> SessionData {
@@ -226,6 +242,55 @@ mod tests {
         let out = CostDisplay::new().render_compact(&data, &theme, &config);
         assert!(out.contains("· 62%"), "got: {}", out);
         assert!(out.contains("≈$3.10"), "got: {}", out);
+    }
+
+    #[test]
+    fn tokens_hidden_when_show_tokens_false() {
+        let data = session_with_duration(600_000);
+        let theme = Theme::default();
+        let config = cfg(&[
+            ("effective_cost", "1.8"),
+            ("cost_estimated", "true"),
+            ("show_tokens", "false"),
+        ]);
+        let out = CostDisplay::new().render_compact(&data, &theme, &config);
+        assert!(!out.contains("tok"), "no token segment: {}", out);
+        assert!(out.contains("≈$10.8/h"), "rate kept: {}", out);
+    }
+
+    #[test]
+    fn tokens_shown_by_default() {
+        let data = session_data();
+        let theme = Theme::default();
+        let out = CostDisplay::new().render_compact(&data, &theme, &WidgetConfig::default());
+        assert!(out.contains("1.0k in / 2.0k out tok"), "labelled tokens by default: {}", out);
+    }
+
+    #[test]
+    fn tokens_auto_hidden_when_context_bar_in_layout() {
+        let data = session_data();
+        let theme = Theme::default();
+        let config = cfg_with_layout(&[], true);
+        let out = CostDisplay::new().render_compact(&data, &theme, &config);
+        assert!(!out.contains("tok"), "auto dedup with context_bar: {}", out);
+    }
+
+    #[test]
+    fn explicit_show_tokens_true_wins_over_layout() {
+        let data = session_data();
+        let theme = Theme::default();
+        let config = cfg_with_layout(&[("show_tokens", "true")], true);
+        let out = CostDisplay::new().render_compact(&data, &theme, &config);
+        assert!(out.contains("1.0k in / 2.0k out tok"), "explicit true wins: {}", out);
+    }
+
+    #[test]
+    fn explicit_show_tokens_false_wins_over_no_context_bar() {
+        let data = session_data();
+        let theme = Theme::default();
+        let config = cfg_with_layout(&[("show_tokens", "false")], false);
+        let out = CostDisplay::new().render_compact(&data, &theme, &config);
+        assert!(!out.contains("tok"), "explicit false wins: {}", out);
     }
 
     #[test]

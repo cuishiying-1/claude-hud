@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use super::theme::{ResolvedTheme, Theme, ThemeRef};
 use super::theme::apply_theme_keys;
 use super::widget::WidgetConfig;
+use crate::core::i18n::Language;
 
 /// Top-level configuration loaded from config.toml.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -40,22 +41,21 @@ pub struct AppConfig {
     #[serde(default)]
     pub budget: BudgetConfig,
 
-    #[serde(default = "default_currency_symbol")]
-    pub currency_symbol: String,
+    #[serde(default)]
+    pub currency_symbol: Option<String>,
 
     #[serde(default = "default_language")]
     pub language: String,
 
     #[serde(default)]
     pub pricing: HashMap<String, crate::core::pricing::PriceEntry>,
+
+    #[serde(default)]
+    pub models: HashMap<String, crate::core::pricing::ModelEntry>,
 }
 
 fn default_active_mod() -> String {
     "glacier-workstation".into()
-}
-
-fn default_currency_symbol() -> String {
-    "$".into()
 }
 
 fn default_language() -> String {
@@ -128,8 +128,13 @@ impl Default for AlertsConfig {
 
 /// [budget] 预算告警：cap_usd（0=关闭）+ warn_pcts 渐进档位（每档一次）。
 /// 冷却复用 [alerts].cooldown_minutes；预算基于 ≈ 实时估算成本触发。
+/// 口径（用户拍板 2026-08-05）：成本/上限/百分比统一语言选币种——
+/// cap_usd 即显示币种数值（zh 用户写 10 就是 10 元，en 即 10 美元），
+/// 百分比 = 语言币种成本 / 上限，无任何 USD 汇率换算。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BudgetConfig {
+    /// 预算上限（显示币种数值：语言选币种，zh 即人民币、en 即美元）。
+    /// 字段名保留历史兼容（usd 后缀不代表币种换算）。
     #[serde(default = "default_budget_cap")]
     pub cap_usd: f64,
     #[serde(default = "default_budget_warn_pcts")]
@@ -293,13 +298,31 @@ impl AppConfig {
                 values.insert(k.clone(), s);
             }
         }
-        WidgetConfig { values, lang: self.language() }
+        WidgetConfig {
+            values,
+            lang: self.language(),
+            context_bar_present: self
+                .compact_layout
+                .iter()
+                .any(|w| w == "context_bar"),
+        }
     }
 
     /// 解析 language 键为 Language；非法值回退 En（警告在 main/doctor 入口各一次）。
     pub fn language(&self) -> crate::core::i18n::Language {
         crate::core::i18n::Language::from_str(&self.language)
             .unwrap_or(crate::core::i18n::Language::En)
+    }
+
+    /// 币种符号决议：显式配置 → zh 语言 ¥ → 其他 $。
+    pub fn currency(&self) -> &str {
+        if let Some(s) = self.currency_symbol.as_deref() {
+            return s;
+        }
+        match self.language() {
+            Language::Zh => "¥",
+            _ => "$",
+        }
     }
 
     /// 主题叠加链：基底(mod preset 或 config preset 或 default) →
@@ -377,9 +400,10 @@ impl Default for AppConfig {
             runtime_overrides: None,
             alerts: AlertsConfig::default(),
             budget: BudgetConfig::default(),
-            currency_symbol: "$".into(),
+            currency_symbol: None,
             language: "en".into(),
             pricing: HashMap::new(),
+            models: HashMap::new(),
         }
     }
 }
@@ -405,8 +429,56 @@ mod tests {
     #[test]
     fn currency_symbol_and_pricing_defaults() {
         let c = AppConfig::default();
-        assert_eq!(c.currency_symbol, "$");
+        assert!(c.currency_symbol.is_none(), "default currency_symbol is None");
+        assert_eq!(c.currency(), "$");
         assert!(c.pricing.is_empty());
+    }
+
+    #[test]
+    fn models_section_parsed_with_dual_currency() {
+        let toml_str = r#"
+            [models."deepseek-v4-flash"]
+            context_window = 1000000
+            synced_at = "2026-08-05T12:00:00Z"
+            [models."deepseek-v4-flash".price_usd]
+            input = 0.14e-6
+            output = 0.28e-6
+            cache_read = 0.0028e-6
+            cache_creation = 0.175e-6
+            [models."deepseek-v4-flash".price_cny]
+            input = 1.0e-6
+            output = 2.0e-6
+            cache_read = 0.02e-6
+            cache_creation = 1.25e-6
+            [pricing."my-model"]
+            input = 1.0e-6
+            output = 2.0e-6
+        "#;
+        let cfg: AppConfig = toml::from_str(toml_str).unwrap();
+        let entry = cfg.models.get("deepseek-v4-flash").expect("model entry parsed");
+        assert_eq!(entry.context_window, Some(1_000_000));
+        assert_eq!(entry.synced_at.as_deref(), Some("2026-08-05T12:00:00Z"));
+        let usd = entry.price_usd.as_ref().expect("usd price");
+        assert!((usd.input - 0.14e-6).abs() < 1e-15);
+        let cny = entry.price_cny.as_ref().expect("cny price");
+        assert!((cny.output - 2.0e-6).abs() < 1e-15);
+        // [pricing] 与 [models] 并存
+        assert!(cfg.pricing.contains_key("my-model"));
+    }
+
+    #[test]
+    fn currency_resolution_explicit_zh_default_en() {
+        let mut zh = AppConfig::default();
+        zh.language = "zh".into();
+        assert_eq!(zh.currency(), "¥", "zh without explicit symbol");
+        let mut explicit = AppConfig::default();
+        explicit.currency_symbol = Some("€".into());
+        assert_eq!(explicit.currency(), "€", "explicit wins");
+        let mut zh_explicit = AppConfig::default();
+        zh_explicit.language = "zh".into();
+        zh_explicit.currency_symbol = Some("$".into());
+        assert_eq!(zh_explicit.currency(), "$", "explicit beats zh default");
+        assert_eq!(AppConfig::default().currency(), "$", "en default");
     }
 
     #[test]
@@ -432,6 +504,20 @@ mod tests {
     }
 
     #[test]
+    fn widget_config_injects_context_bar_presence() {
+        let cfg: AppConfig = toml::from_str(
+            "compact_layout = [\"model_display\", \"context_bar\", \"cost_display\"]\n",
+        )
+        .unwrap();
+        assert!(cfg.widget_config("cost_display").context_bar_present);
+        let minimal: AppConfig =
+            toml::from_str("compact_layout = [\"model_display\", \"cost_display\"]\n").unwrap();
+        assert!(!minimal.widget_config("cost_display").context_bar_present);
+        // 默认布局含 context_bar
+        assert!(AppConfig::default().widget_config("cost_display").context_bar_present);
+    }
+
+    #[test]
     fn pricing_table_parses_with_field_defaults() {
         let toml_str = r#"
             currency_symbol = "¥"
@@ -439,7 +525,7 @@ mod tests {
             "m1" = { input = 1e-6, output = 2e-6 }
         "#;
         let cfg: AppConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.currency_symbol, "¥");
+        assert_eq!(cfg.currency_symbol.as_deref(), Some("¥"));
         let p = cfg.pricing.get("m1").expect("model price parsed");
         assert_eq!(p.input, 1e-6);
         assert_eq!(p.output, 2e-6);

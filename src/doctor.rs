@@ -104,6 +104,7 @@ pub fn run(
 
     contract_probe();
     pricing_check(config, lang, &mut failures);
+    model_check(config, lang, &mut failures);
     budget_check(lang);
     let lang_ok = Language::from_str(&config.language).is_some();
     failures += check(
@@ -258,6 +259,63 @@ fn pricing_check(config: &AppConfig, lang: Language, failures: &mut usize) {
     );
 }
 
+/// v0.7 [models] 校验（纯函数，可单测）：返回 (坏窗口模型, 负价模型)。
+/// 窗口 ≤0 / 任币种任价格 <0 计入；字段缺失（None）不算。
+fn model_issues(config: &AppConfig) -> (Vec<String>, Vec<String>) {
+    let bad_window: Vec<String> = config
+        .models
+        .iter()
+        .filter(|(_, m)| m.context_window == Some(0))
+        .map(|(id, _)| id.clone())
+        .collect();
+    let bad_price: Vec<String> = config
+        .models
+        .iter()
+        .filter(|(_, m)| {
+            [m.price_usd.as_ref(), m.price_cny.as_ref()].into_iter().flatten().any(|p| {
+                p.input < 0.0 || p.output < 0.0 || p.cache_read < 0.0 || p.cache_creation < 0.0
+            })
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    (bad_window, bad_price)
+}
+
+/// v0.7 [models] 检查（信息项 + failure）：窗口 ≤0 / 负价 → failure；
+/// 信息项：内置表数量 + 各 synced_at 条目来源时间。
+fn model_check(config: &AppConfig, lang: Language, failures: &mut usize) {
+    let (bad_window, bad_price) = model_issues(config);
+    if !bad_window.is_empty() {
+        println!(
+            "{}",
+            tr(lang, "runtime.d_model_window_zero")
+                .replace("{models}", &bad_window.join(", "))
+        );
+        *failures += 1;
+    }
+    if !bad_price.is_empty() {
+        println!(
+            "{}",
+            tr(lang, "runtime.d_model_price_neg")
+                .replace("{models}", &bad_price.join(", "))
+        );
+        *failures += 1;
+    }
+    println!(
+        "{}",
+        tr(lang, "runtime.d_builtin_models")
+            .replace("{n}", &crate::core::pricing::builtin_models().len().to_string())
+    );
+    for (id, m) in &config.models {
+        if let Some(ts) = &m.synced_at {
+            println!(
+                "{}",
+                tr(lang, "runtime.d_model_synced").replace("{id}", id).replace("{ts}", ts)
+            );
+        }
+    }
+}
+
 /// ⑱ 升级检查（信息项，永不计数为 failure）。
 fn update_check(lang: Language) {
     let status = crate::core::update::check_update();
@@ -314,5 +372,52 @@ fn budget_check(lang: Language) {
             "{}",
             tr(lang, "runtime.d_budget_tier").replace("{tier}", &state.budget_tier.to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_issues;
+    use crate::core::config::AppConfig;
+    use crate::core::pricing::{ModelEntry, PriceEntry};
+
+    fn cfg_with(entries: Vec<(String, ModelEntry)>) -> AppConfig {
+        let mut c = AppConfig::default();
+        c.models = entries.into_iter().collect();
+        c
+    }
+
+    #[test]
+    fn model_issues_clean_config() {
+        let cfg = cfg_with(vec![(
+            "m".into(),
+            ModelEntry { context_window: Some(1000), ..Default::default() },
+        )]);
+        let (bad_window, bad_price) = model_issues(&cfg);
+        assert!(bad_window.is_empty() && bad_price.is_empty());
+    }
+
+    #[test]
+    fn model_issues_zero_window_and_negative_price() {
+        let cfg = cfg_with(vec![
+            ("a".into(), ModelEntry { context_window: Some(0), ..Default::default() }),
+            (
+                "b".into(),
+                ModelEntry {
+                    price_cny: Some(PriceEntry { input: -1.0e-6, ..Default::default() }),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let (bad_window, bad_price) = model_issues(&cfg);
+        assert_eq!(bad_window, vec!["a".to_string()]);
+        assert_eq!(bad_price, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn model_issues_ignores_absent_optional_fields() {
+        let cfg = cfg_with(vec![("m".into(), ModelEntry::default())]);
+        let (bad_window, bad_price) = model_issues(&cfg);
+        assert!(bad_window.is_empty() && bad_price.is_empty(), "all-None entry is fine");
     }
 }

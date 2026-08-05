@@ -60,7 +60,7 @@ claude-hud/
 │   │   ├── session.rs         # SessionData + stdin JSON 反序列化
 │   │   ├── transcript.rs      # Transcript JSONL 增量解析 + 统计/归因/预测
 │   │   ├── widget.rs          # Widget trait + WidgetRegistry + WidgetConfig
-│   │   ├── theme.rs           # 主题引擎：20 token、6 预设、图标集决议、字体探测
+│   │   ├── theme.rs           # 主题引擎：20 token、10 预设、图标集决议、字体探测
 │   │   ├── config.rs          # AppConfig / ModPackage 加载（内置预设编译进二进制）
 │   │   ├── cc_config.rs       # settings.json 合并/移除 statusLine（原子写 + 备份）
 │   │   ├── history.rs         # SQLite 跨会话历史
@@ -68,7 +68,7 @@ claude-hud/
 │   │   ├── animation.rs       # 时间相位纯函数（now_phase/breathe/gradient/ease_out/scanline_offset）
 │   │   ├── i18n.rs            # 轻量 i18n：Language/回退链/tr/tr_dyn（include_str! 内嵌字符串表）
 │   │   └── ansi.rs            # ANSI True Color / 截断等工具
-│   ├── widgets/               # 14 个内置 Widget + 脚本 Widget
+│   ├── widgets/               # 15 个内置 Widget + 脚本 Widget
 │   └── probe/
 │       ├── git.rs             # Git 状态探测（分支/脏/领先落后）
 │       └── filesystem.rs      # Skills/MCP 数量扫描
@@ -179,7 +179,7 @@ pub trait Widget {
 
 `WidgetConfig` 是 `HashMap<String,String>` 的薄封装，提供 `get_str/get_bool/get_f64/get_u64`，从 `config.toml` 的 `[widgets.<id>]` 表反序列化而来（值统一转字符串）。
 
-`WidgetRegistry` 持有全部 Widget 实例；主流程（main.rs）依次注册 14 个内置 Widget + 按配置实例化脚本 Widget。
+`WidgetRegistry` 持有全部 Widget 实例；主流程（main.rs）依次注册 15 个内置 Widget + 按配置实例化脚本 Widget。
 
 ### 5.2 内置 Widget 清单
 
@@ -195,7 +195,7 @@ pub trait Widget {
 | `rate_limits` | `5h:34% 7d:12%`（超 90% 变红） | 5h Gauge + 7d 文本 | stdin `rate_limits.*` | ✅ |
 | `git_status` | `main* ↑3`（无仓库渲染 `—`） | 分支/脏/领先/落后 | git 命令 | ✅ |
 
-**Phase 2（6 个，依赖 Transcript 解析）**
+**Phase 2（8 个，依赖 Transcript 解析 / 历史库）**
 
 | ID | 紧凑输出 | 仪表盘 | 状态 |
 |----|---------|--------|------|
@@ -206,6 +206,7 @@ pub trait Widget {
 | `skills_mcp_dynamic` | 活跃 Skill/MCP 名 | 调用次数统计 | ✅ |
 | `alerts` | 阈值告警链（呼吸闪烁） | 告警面板 | ✅ |
 | `token_rate` | `tok 3.1k/min` 速率文本（空数据 `—`） | 最近 24 桶盲文频谱竖条 | ✅ |
+| `tui_trend` | （不渲染，空串） | 近 7 天成本柱状（历史库不可用 `—`） | ✅ |
 
 **Phase 3（脚本 Widget，见 §13）**：`script_rhai` / `script_shell` / `script_http`。
 
@@ -269,7 +270,7 @@ stdin JSON → SessionData → (Transcript 增量解析 → 广播 update_transc
 
 **样式（9）**：`bar_filled`(char) `bar_empty`(char) `separator`(string) `border_style`(enum: single/double/rounded/thick/hidden) `icon_set`(enum) `bar_width` `padding` `compact_lines` `dashboard_grid`
 
-### 8.2 6 套内置主题
+### 8.2 10 套内置主题
 
 | 主题 | 背景 | 主色 | 气质 |
 |------|------|------|------|
@@ -279,6 +280,10 @@ stdin JSON → SessionData → (Transcript 增量解析 → 广播 update_transc
 | catppuccin | #1e1e2e | 紫 #cba6f7 | 柔和护眼 |
 | monochrome | #1a1a1a | 纯灰度 | 极简 |
 | solarized-dark | #002b36 | 青 #2aa198 | 经典 |
+| gruvbox-dark | #282828 | 黄 #fabd2f / 绿 #b8bb26 | 复古暖调（⑳ v0.6） |
+| one-dark | #282c34 | 蓝 #61afef / 绿 #98c379 | Atom 经典（⑳ v0.6） |
+| github-dark | #0d1117 | 蓝 #58a6ff / 绿 #3fb950 | 代码平台默认（⑳ v0.6） |
+| palenight | #292d3e | 蓝紫 #82aaff / 绿 #c3e88d | Material 深紫（⑳ v0.6） |
 
 ### 8.3 图标集与自动决议（`IconSet::Auto`）
 
@@ -365,7 +370,7 @@ config.toml: active_mod = "xxx"
 
 ### 10.4 Mod 管理命令
 
-✅ 全部 11 项实现：`list` / `use`（校验存在性，`-` 经 previous_mod 往返，`@scene` 场景别名）/ `preview` / `current` / `save`（当前配置真实快照：合并主题 + compact_widgets + widgets 段）/ `export` / `import` / `delete` / `reset` / `pick`（序号选择器）
+✅ 全部 12 项实现：`list` / `use`（校验存在性，`-` 经 previous_mod 往返，`@scene` 场景别名）/ `preview` / `current` / `save`（当前配置真实快照：合并主题 + compact_widgets + widgets 段）/ `export` / `import` / `install`（⑰ v0.6：GitHub mods/ 目录批量安装，两阶段批处理 + name 安全校验 + 脚本供应链警告 + 自动激活）/ `delete` / `reset` / `pick`（序号选择器）
 
 ---
 
@@ -410,9 +415,9 @@ SQLite：`~/.claude/plugins/claude-hud/history.db`，表 `sessions`：
 | mod_used | 当时激活的 Mod |
 | model / transcript_path | 会话模型 / transcript 路径（v0.6 新增列；旧库首次打开 ALTER TABLE 自动补齐） |
 
-查询能力：`weekly_stats()`（近 7 天汇总）、`recent_sessions(n)`、`daily_cost_trend()`（近 7 天每日费用）、`sessions_page(limit, offset, date)`（⑤ 分页列表）、`session_by_id(id)`（⑥ 单会话详情）。
+查询能力：`weekly_stats()`（近 7 天汇总）、`recent_sessions(n)`、`daily_cost_trend()`（近 7 天每日费用）、`sessions_page(limit, offset, date)`（⑤ 分页列表）、`session_by_id(id)`（⑥ 单会话详情）、`weekly_compare()`（⑭ 本周 vs 上周周聚合对比：cost/sessions/tokens，`%Y-%W` 周键，上周 = now-7 天周键，跨年安全；任一周边数据缺失 → None）。
 
-记录时机：**仪表盘退出时**（q/Esc）；**紧凑模式会话切换自动结账**——render 检测到 `transcript_path` 变化即把上一会话写入历史库（失败仅 stderr 警告，不中断渲染）。`claude-hud history` 子命令输出三块统计（§15）。📊 TUI 仪表盘暂未展示历史趋势（Web 面板已有 This Week 卡片，见 §14）。
+记录时机：**仪表盘退出时**（q/Esc）；**紧凑模式会话切换自动结账**——render 检测到 `transcript_path` 变化即把上一会话写入历史库（失败仅 stderr 警告，不中断渲染）。`claude-hud history` 子命令输出三块统计（§15）。📊 TUI 仪表盘现可展示近 7 天成本柱状（`tui_trend` widget，§5.2）；Web 面板有 This Week 卡片与趋势图（§14）。
 
 ---
 
@@ -458,9 +463,11 @@ refresh_seconds = 300
 | `/` / `/index.html` | 内置单页 HTML（深色卡片式，JetBrains Mono） |
 | `/api/data` | JSON：model/context_pct/cost_usd/duration_ms/weekly + 全部 Widget 紧凑输出 |
 | `/api/health` | `OK` |
+| `/api/sessions?limit=&offset=` | ⑬ 分页会话列表（复用 `sessions_page` 口径；5 列表格 + 加载更多） |
+| `/api/sessions/{id}` | ⑬ 单会话明细（模型/成本/时长/代理/token 分解 + transcript 尾读工具明细；未找到 404） |
 
-- `weekly` 字段：本周聚合（total_cost/total_sessions/total_tokens/avg_duration_min/avg_agents_per_session）；历史库 open/query 失败时返回 `available:false` 全 0（前端显示 `—`）
-- 前端每 2s 轮询 `/api/data`，卡片含模型、上下文进度条、费用、时长、**This Week 历史卡片** + 各 Widget 输出区
+- `weekly` 字段：本周聚合（total_cost/total_sessions/total_tokens/avg_duration_min/avg_agents_per_session）+ `week_compare`（⑭ 本周 vs 上周成本/会话/token 环比，`%Y-%W` 周键，上周 = now-7 天周键；无上周数据 → null）；历史库 open/query 失败时返回 `available:false` 全 0（前端显示 `—`）
+- 前端每 2s 轮询 `/api/data`，卡片含模型、上下文进度条、费用、时长、**This Week 历史卡片**（含环比行）+ **Weekly cost trend SVG 图**（⑫ 服务端渲染零依赖，<2 点占位）+ **Sessions 列表**（行点击展开明细）+ 各 Widget 输出区
 - 实现使用 `Box::leak` 持有 registry/config/theme（静态生命周期）
 
 ---
@@ -639,7 +646,7 @@ irm https://raw.githubusercontent.com/cuishiying-1/claude-hud/master/scripts/ins
 
 ### ✅ 完整实现
 
-CLI 25 子命令 · 14 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 预设 + 字体探测 · 图标 auto 决议 · 6 出厂 Mod · Transcript 增量解析与统计 · 紧凑渲染管线 · 仪表盘 4 布局 · Web 面板 · SQLite 历史数据层 · 5 类 OS 通知 · setup/uninstall/doctor · 一键安装脚本 ×2 平台 · CI 发布矩阵 · 单元测试 + 黑盒测试套件 · 数据通路（state.json 5 段全量原子写 + Transcript 跨进程游标累计 + 告警跨进程冷却 + 越阈告警配置化 + doctor 自检 last_error 上报）· 输入契约（subagentStatusLine/扁平 rate_limits 双形态 + render --dump 键分类 + doctor 契约探针）· 真实时间轴（ISO8601 主时间轴 + timestamps_reliable 降级 + epoch 60s 分桶 + 真实卡顿/压缩预测）· 成本正确性（currency_symbol 全局 + [pricing] 三态重算 + context_bar tokens + doctor 负单价校验）· 配置契约（ThemeRef 双形态 + 四层叠加 + 失败警告 + import 落盘）· Mod 真相（use 校验 + previous_mod + @scene + save 快照 + 渲染灌入 + pick）· ANSI 整段上色（4 widget + 黑盒 ANSI 结构断言）· 历史库消费（history 三块输出 + render 会话切换自动结账 + serve weekly 字段 + Web This Week 卡片 + 黑盒用例 130 例）· Shell Widget 跨平台（Windows cmd /C、Unix sh -c + 死代码清理）· 补全真实现（clap_complete：bash/zsh/fish/powershell）· 零宽度感知（COLUMNS 宽度源 + fit_line 组级截断 + 字段 24 字符截断）· dashboard 交互（l 布局循环 + default_layout 持久化 + ? 帮助面板 + 底部 footer + ←/→ tab 切换）· 通知全接线（5/5 + 进程内去重）· 安装健壮性（无 release 明确报错 + 三态输出 + setup 时间戳备份）· 全局生效提示（写配置命令 8 处 `(applies to all windows)`）· 升级通路（update check 404/离线降级 + doctor update:）· v0.2 成本哨兵（realtime_cost 双轨 + cost_display 合并单组 `≈$X · Xk/Xk tok` + 零数据 `—` 降级 + `[budget]` 档位单调/跨进程冷却 + doctor 档位读取 + `history --weekly` 五指标 + serve 周趋势曲线 + 黑盒用例 138 例）· v0.3 性能与卫生（token_timeline 360 桶上限 + 结账 path→ts 表去重（振荡防 double-billing）+ serve 历史 30s TTL 缓存 + 状态栏预算占比 `· NN%` + 17 个构建 warning 清零（动画原语收缩/死代码清理）+ 黑盒用例 141 例）· v0.4 视觉批次（时间相位动画重建 + 6 效果接线 + tabbed 布局补全 + 黑盒用例 147 例）· v0.5 国际化（language 键 + en/zh 表 + 回退链 + clap 后处理注入 + serve JS T 表 + doctor/main 全量接入 + CLAUDE_HUD_CONFIG env 注入 + 黑盒用例 152 例）· 批次 III 布局补全（agent-centric/kpi/contextual 真实实现 + contextual 动态两态（subagent 判据）+ 未实现布局回归改接 hex-2x3 + 黑盒用例 156 例 + 单元测试 151 个）· 批次 I 成本与预测（① 内置模型价格库（9 模型 2026-07 官方价 + 用户 [pricing] 覆盖合并 + doctor 内置表信息项）+ ② 实时成本 cache 权重修正（cache_read/cache_creation × 单价，缺失回归不变）+ ③ 成本速率段 `· ≈$X.X/h`（零时长/零成本隐藏）+ ④ 压缩预测标注 `compact ≈Nm`（transcript 首尾桶斜率外推）+ `[alerts] compaction_eta_minutes` 临近通知（默认 15，0=关，复用冷却去重）+ 黑盒用例 165 例 + 单元测试 166 个）· 批次 V 卡顿归因（⑮ AgentRecord.last_tool_name 记录（serde default 旧 state 兼容）+ agent_detail 卡顿归因文本 `stalled 3m · bash`（danger 色，无工具记录维持 elapsed）+ alerts 卡顿行归因 + 不可靠时间轴不假告警 + 黑盒用例 168 例 + 单元测试 170 个）· 批次 II 会话复盘与浏览（⑤ sessions 分页列表 --limit/--offset/--date + ⑥ session 详情（model/transcript_path 入库 migration + transcript 尾读补 token 分解/代理明细）+ ⑦ 工具成本归因排行（估算路径 per_call 均摊 ≈ 标注，未命中 `—`）+ 黑盒用例 180 例 + 单元测试 180 个）
+CLI 25 子命令 · 15 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 预设 + 字体探测 · 图标 auto 决议 · 6 出厂 Mod · Transcript 增量解析与统计 · 紧凑渲染管线 · 仪表盘 4 布局 · Web 面板 · SQLite 历史数据层 · 5 类 OS 通知 · setup/uninstall/doctor · 一键安装脚本 ×2 平台 · CI 发布矩阵 · 单元测试 + 黑盒测试套件 · 数据通路（state.json 5 段全量原子写 + Transcript 跨进程游标累计 + 告警跨进程冷却 + 越阈告警配置化 + doctor 自检 last_error 上报）· 输入契约（subagentStatusLine/扁平 rate_limits 双形态 + render --dump 键分类 + doctor 契约探针）· 真实时间轴（ISO8601 主时间轴 + timestamps_reliable 降级 + epoch 60s 分桶 + 真实卡顿/压缩预测）· 成本正确性（currency_symbol 全局 + [pricing] 三态重算 + context_bar tokens + doctor 负单价校验）· 配置契约（ThemeRef 双形态 + 四层叠加 + 失败警告 + import 落盘）· Mod 真相（use 校验 + previous_mod + @scene + save 快照 + 渲染灌入 + pick）· ANSI 整段上色（4 widget + 黑盒 ANSI 结构断言）· 历史库消费（history 三块输出 + render 会话切换自动结账 + serve weekly 字段 + Web This Week 卡片 + 黑盒用例 130 例）· Shell Widget 跨平台（Windows cmd /C、Unix sh -c + 死代码清理）· 补全真实现（clap_complete：bash/zsh/fish/powershell）· 零宽度感知（COLUMNS 宽度源 + fit_line 组级截断 + 字段 24 字符截断）· dashboard 交互（l 布局循环 + default_layout 持久化 + ? 帮助面板 + 底部 footer + ←/→ tab 切换）· 通知全接线（5/5 + 进程内去重）· 安装健壮性（无 release 明确报错 + 三态输出 + setup 时间戳备份）· 全局生效提示（写配置命令 8 处 `(applies to all windows)`）· 升级通路（update check 404/离线降级 + doctor update:）· v0.2 成本哨兵（realtime_cost 双轨 + cost_display 合并单组 `≈$X · Xk/Xk tok` + 零数据 `—` 降级 + `[budget]` 档位单调/跨进程冷却 + doctor 档位读取 + `history --weekly` 五指标 + serve 周趋势曲线 + 黑盒用例 138 例）· v0.3 性能与卫生（token_timeline 360 桶上限 + 结账 path→ts 表去重（振荡防 double-billing）+ serve 历史 30s TTL 缓存 + 状态栏预算占比 `· NN%` + 17 个构建 warning 清零（动画原语收缩/死代码清理）+ 黑盒用例 141 例）· v0.4 视觉批次（时间相位动画重建 + 6 效果接线 + tabbed 布局补全 + 黑盒用例 147 例）· v0.5 国际化（language 键 + en/zh 表 + 回退链 + clap 后处理注入 + serve JS T 表 + doctor/main 全量接入 + CLAUDE_HUD_CONFIG env 注入 + 黑盒用例 152 例）· 批次 III 布局补全（agent-centric/kpi/contextual 真实实现 + contextual 动态两态（subagent 判据）+ 未实现布局回归改接 hex-2x3 + 黑盒用例 156 例 + 单元测试 151 个）· 批次 I 成本与预测（① 内置模型价格库（9 模型 2026-07 官方价 + 用户 [pricing] 覆盖合并 + doctor 内置表信息项）+ ② 实时成本 cache 权重修正（cache_read/cache_creation × 单价，缺失回归不变）+ ③ 成本速率段 `· ≈$X.X/h`（零时长/零成本隐藏）+ ④ 压缩预测标注 `compact ≈Nm`（transcript 首尾桶斜率外推）+ `[alerts] compaction_eta_minutes` 临近通知（默认 15，0=关，复用冷却去重）+ 黑盒用例 165 例 + 单元测试 166 个）· 批次 V 卡顿归因（⑮ AgentRecord.last_tool_name 记录（serde default 旧 state 兼容）+ agent_detail 卡顿归因文本 `stalled 3m · bash`（danger 色，无工具记录维持 elapsed）+ alerts 卡顿行归因 + 不可靠时间轴不假告警 + 黑盒用例 168 例 + 单元测试 170 个）· 批次 II 会话复盘与浏览（⑤ sessions 分页列表 --limit/--offset/--date + ⑥ session 详情（model/transcript_path 入库 migration + transcript 尾读补 token 分解/代理明细）+ ⑦ 工具成本归因排行（估算路径 per_call 均摊 ≈ 标注，未命中 `—`）+ 黑盒用例 180 例 + 单元测试 180 个）· 批次 IV 历史趋势与 Web 升级（⑪ TUI 趋势面板（tui_trend widget + dashboard 非 TTY 单帧退出）+ ⑫ Web SVG 成本趋势图（服务端渲染零依赖，<2 点占位）+ ⑬ Web 会话列表与成本明细（/api/sessions 分页 + 行点击展开详情）+ ⑭ 周环比（%Y-%W 双周键 + This Week 环比行，无上周 `—`）+ 黑盒用例 191 例 + 单元测试 209 个）
 
 ### 🟡 部分实现 / 占位
 
@@ -648,7 +655,6 @@ CLI 25 子命令 · 14 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 �
 | 仪表盘布局 | hex-2x3/freeform 未实现 |
 | Mod 布局 ID | full 未实现（报 "not implemented"）；minimal/activity/agent-centric/kpi/contextual 已实现（批次 III 补全后 6 个出厂 Mod 全部真实渲染） |
 | 动画 | 6 效果已接线（渐变进度条/呼吸/缓动计数器/CRT 扫描线/伪 3D 面板/盲文频谱）；其余装饰效果按拍板砍除 |
-| 历史展示（TUI） | TUI 仪表盘趋势面板未实现（Web 面板已有 This Week 卡片） |
 
 ### ⬜ 设计蓝图未实现（见 DESIGN.md）
 
@@ -676,8 +682,9 @@ CLI 25 子命令 · 14 内置 Widget · 3 脚本 Widget · 主题 20 token + 6 �
 | v0.6 批次 I 成本与预测（①②③④，2026-08-04） | 内置价格库（①）+ 实时 cache 权重（②）+ 成本速率段（③）+ 压缩预测标注与临近通知（④）+ 黑盒用例 165 例 + 单元测试 166 个 | ✅ |
 | v0.6 批次 V 卡顿归因（⑮，2026-08-04） | AgentRecord.last_tool_name 记录 + agent_detail 卡顿归因 `stalled 3m · bash`（无工具记录维持 elapsed）+ alerts 卡顿行归因 + 不可靠时间轴不假告警 + 黑盒用例 168 例 + 单元测试 170 个 | ✅ |
 | v0.6 批次 II 会话复盘与浏览（⑤⑥⑦，2026-08-05） | sessions 分页列表（⑤）+ session 详情（⑥，migration + transcript 尾读）+ 工具成本归因排行（⑦，估算路径）+ 黑盒用例 180 例 + 单元测试 180 个 | ✅ |
+| v0.6 批次 IV 历史趋势与 Web 升级（⑪⑫⑬⑭，2026-08-05） | TUI 趋势面板（⑪，tui_trend + 非 TTY 单帧）+ Web SVG 趋势图（⑫）+ Web 会话列表与明细（⑬）+ 周环比（⑭）+ 黑盒用例 191 例 + 单元测试 209 个 | ✅ |
 | Phase 5 持续迭代 | 更多主题、性能优化 | ⬜ |
 
 ---
 
-*本文档基于源码（src/ 共约 4100 行）与现有文档（DESIGN/PLUGIN/DEPLOY/README/CHANGELOG）整理，生成于 2026-07-31，更新于 2026-08-05（Phase 4 batch C 剩余 ⑨⑩⑪⑮⑯⑰⑱ + v0.2 成本哨兵 + v0.3 性能与卫生 + v0.4 视觉批次 + v0.5 国际化 + v0.6 批次 III 布局补全 + v0.6 批次 I 成本与预测 + v0.6 批次 V 卡顿归因 + v0.6 批次 II 会话复盘与浏览交付回写）。*
+*本文档基于源码（src/ 共约 4100 行）与现有文档（DESIGN/PLUGIN/DEPLOY/README/CHANGELOG）整理，生成于 2026-07-31，更新于 2026-08-05（Phase 4 batch C 剩余 ⑨⑩⑪⑮⑯⑰⑱ + v0.2 成本哨兵 + v0.3 性能与卫生 + v0.4 视觉批次 + v0.5 国际化 + v0.6 批次 III 布局补全 + v0.6 批次 I 成本与预测 + v0.6 批次 V 卡顿归因 + v0.6 批次 II 会话复盘与浏览 + v0.6 批次 IV 历史趋势与 Web 升级交付回写）。*

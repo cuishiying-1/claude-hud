@@ -40,6 +40,55 @@ pub fn has_status_line(existing: &str) -> bool {
     }
 }
 
+pub const ENV_WINDOW_KEY: &str = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
+
+/// 在 settings.json 的 env 块写入 CLAUDE_CODE_MAX_CONTEXT_TOKENS（字符串值）。
+/// env 不存在则创建；其他 env 键与顶层键全部保留。
+pub fn set_env_window(existing: &str, window: u64) -> Result<String, String> {
+    let mut root = parse_root(existing)?;
+    if root.is_null() {
+        root = Value::Object(Map::new());
+    }
+    if !root.is_object() {
+        return Err("settings.json must be a JSON object at top level".to_string());
+    }
+    let mut env = match root.get("env") {
+        None => Value::Object(Map::new()),
+        Some(v) if v.is_object() => v.clone(),
+        Some(_) => return Err("settings.json env must be a JSON object".to_string()),
+    };
+    if let Some(obj) = env.as_object_mut() {
+        obj.insert(ENV_WINDOW_KEY.to_string(), Value::String(window.to_string()));
+    }
+    root["env"] = env;
+    pretty(&root)
+}
+
+/// 从 settings.json env 块移除 CLAUDE_CODE_MAX_CONTEXT_TOKENS；env 变空则整块删除。
+pub fn remove_env_window(existing: &str) -> Result<String, String> {
+    let mut root = parse_root(existing)?;
+    if root.is_null() {
+        root = Value::Object(Map::new());
+    }
+    if let Some(env) = root.get_mut("env") {
+        if let Some(obj) = env.as_object_mut() {
+            obj.remove(ENV_WINDOW_KEY);
+        }
+        if env.as_object().map(|o| o.is_empty()).unwrap_or(false) {
+            if let Some(obj) = root.as_object_mut() {
+                obj.remove("env");
+            }
+        }
+    }
+    pretty(&root)
+}
+
+/// 读取 env 块中的窗口值；缺失/解析失败 → None。
+pub fn get_env_window(existing: &str) -> Option<String> {
+    let root = parse_root(existing).ok()?;
+    root.get("env")?.get(ENV_WINDOW_KEY)?.as_str().map(String::from)
+}
+
 fn parse_root(existing: &str) -> Result<Value, String> {
     if existing.trim().is_empty() {
         return Ok(Value::Object(Map::new()));
@@ -144,5 +193,72 @@ mod tests {
     #[test]
     fn has_status_line_invalid_json_is_false() {
         assert!(!has_status_line("{not json"));
+    }
+
+    #[test]
+    fn set_env_window_creates_block() {
+        let out = set_env_window("{}", 1_000_000).unwrap();
+        let root: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(root["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000");
+    }
+
+    #[test]
+    fn set_env_window_preserves_other_keys_and_env() {
+        let out = set_env_window(
+            r#"{"apiKeyHelper":{"alwaysAllowedTools":[]},"env":{"ANTHROPIC_BASE_URL":"https://x"}}"#,
+            1_000_000,
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&out).unwrap();
+        assert!(root.get("apiKeyHelper").is_some(), "other top-level keys kept");
+        assert_eq!(root["env"]["ANTHROPIC_BASE_URL"], "https://x", "other env kept");
+        assert_eq!(root["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000");
+    }
+
+    #[test]
+    fn set_env_window_replaces_existing_value() {
+        let out = set_env_window(r#"{"env":{"CLAUDE_CODE_MAX_CONTEXT_TOKENS":"200000"}}"#, 500_000).unwrap();
+        let root: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(root["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "500000");
+        assert_eq!(root["env"].as_object().unwrap().len(), 1, "no duplication");
+    }
+
+    #[test]
+    fn set_env_window_invalid_inputs_err() {
+        assert!(set_env_window("{not json", 1).is_err());
+        assert!(set_env_window("[1,2]", 1).is_err(), "non-object root");
+        assert!(set_env_window(r#"{"env": 42}"#, 1).is_err(), "non-object env");
+    }
+
+    #[test]
+    fn remove_env_window_removes_key_keeps_env() {
+        let out = remove_env_window(r#"{"env":{"CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1000000","X":"y"}}"#).unwrap();
+        let root: Value = serde_json::from_str(&out).unwrap();
+        assert!(root["env"].get("CLAUDE_CODE_MAX_CONTEXT_TOKENS").is_none());
+        assert_eq!(root["env"]["X"], "y", "other env kept");
+    }
+
+    #[test]
+    fn remove_env_window_drops_empty_env_block() {
+        let out = remove_env_window(r#"{"env":{"CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1000000"}}"#).unwrap();
+        let root: Value = serde_json::from_str(&out).unwrap();
+        assert!(root.get("env").is_none(), "empty env removed");
+    }
+
+    #[test]
+    fn remove_env_window_missing_is_noop() {
+        let out = remove_env_window(r#"{"permissions":{}}"#).unwrap();
+        let root: Value = serde_json::from_str(&out).unwrap();
+        assert!(root.get("permissions").is_some());
+        assert!(root.get("env").is_none());
+    }
+
+    #[test]
+    fn get_env_window_reads_value() {
+        assert_eq!(get_env_window(r#"{"env":{"CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1000000"}}"#),
+                   Some("1000000".to_string()));
+        assert_eq!(get_env_window(r#"{"permissions":{}}"#), None);
+        assert_eq!(get_env_window(""), None);
+        assert_eq!(get_env_window("{bad"), None, "unparseable → None");
     }
 }

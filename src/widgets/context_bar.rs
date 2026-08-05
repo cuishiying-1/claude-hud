@@ -79,13 +79,16 @@ impl Widget for ContextBar {
             ansi::ansi_fg(&theme.bar_filled.to_string().repeat(filled), color)
         };
         let empty_str = theme.bar_empty.to_string().repeat(empty);
-        let mut out = format!("ctx {}{}{} {:.0}% {}/{} tok",
+        // 输入/输出标注：裸 `X/Y tok` 用户看不出哪个是哪个。
+        let tokens = tr(config.lang, "widget.tokens_in_out")
+            .replace("{in}", &format_k(data.context_window.total_input_tokens))
+            .replace("{out}", &format_k(data.context_window.total_output_tokens));
+        let mut out = format!("ctx {}{}{} {:.0}% {}",
             filled_str,
             ansi::ansi_fg(&empty_str, &theme.border),
             ansi::ansi_reset(),
             pct,
-            format_k(data.context_window.total_input_tokens),
-            format_k(data.context_window.total_output_tokens));
+            tokens);
         // ④ 压缩预测标注（数据不足 → 无标注，诚实降级）。
         if let Some(m) = self.compaction_eta(data) {
             out.push_str(&format!(
@@ -164,6 +167,7 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            context_bar_present: false,
             lang: crate::core::i18n::Language::En,
         }
     }
@@ -239,5 +243,23 @@ mod tests {
         bar.update_transcript(&s);
         let out = bar.render_compact(&data, &Theme::default(), &cfg(true));
         assert!(!out.contains("compact ≈"), "no eta text: {}", out);
+    }
+
+    #[test]
+    fn compact_tokens_labelled_in_out() {
+        // in=1000, out=2000（session_data 构造）→ 标注输入/输出，用户可读
+        let data = session_data(44.0);
+        let out = ContextBar::new().render_compact(&data, &Theme::default(), &cfg(true));
+        assert!(out.contains("1.0k in / 2.0k out tok"), "labelled tokens: {}", out);
+        assert!(!out.contains("/2.0k tok"), "no bare x/y tok: {}", out);
+    }
+
+    #[test]
+    fn compact_tokens_labelled_zh() {
+        let data = session_data(44.0);
+        let mut config = cfg(true);
+        config.lang = crate::core::i18n::Language::Zh;
+        let out = ContextBar::new().render_compact(&data, &Theme::default(), &config);
+        assert!(out.contains("输入 1.0k / 输出 2.0k tok"), "zh labelled tokens: {}", out);
     }
 }

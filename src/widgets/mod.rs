@@ -13,6 +13,7 @@ pub mod skills_mcp;
 pub mod skills_mcp_dynamic;
 pub mod token_attribution;
 pub mod token_rate;
+pub mod tui_trend;
 
 use crate::core::widget::WidgetRegistry;
 
@@ -37,6 +38,7 @@ pub fn register_all(registry: &mut WidgetRegistry, _config: &crate::core::config
     registry.register(Box::new(skills_mcp_dynamic::SkillsMcpDynamic::new()));
     registry.register(Box::new(alerts::Alerts::new()));
     registry.register(Box::new(token_rate::TokenRate::new()));
+    registry.register(Box::new(tui_trend::TuiTrend));
 
     // Phase 3: user-registered script widgets are added at runtime
     // via config. Script widget instances are created per-config.

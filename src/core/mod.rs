@@ -3,6 +3,8 @@ pub mod ansi;
 pub mod config;
 pub mod history;
 pub mod i18n;
+pub mod mod_install;
+pub mod modelsync;
 pub mod pricing;
 pub mod scripting;
 pub mod session;

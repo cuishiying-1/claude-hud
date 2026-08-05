@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- 批次 VI ⑰ `mod install <user/repo>`：GitHub mods/ 目录批量安装（contents API 列目录 + raw 拉取 .toml；两阶段批处理：拉取校验 → 落盘报告）；`mod_info.name` 落盘安全校验（长度/字符集/内置名冲突）；rhai/shell/http 脚本组件供应链警告；安装后自动激活字典序最大成功 Mod；重跑 = 更新；单条失败跳过；全部失败 exit 1；⑳ 4 个新主题预设（gruvbox-dark / one-dark / github-dark / palenight，6 → 10）；黑盒 194 例
+- 批次 IV 历史趋势与 Web 升级：⑪ TUI 历史趋势面板（dashboard 新 widget `tui_trend`，近 7 天成本柱状，历史库不可用显示 `—`；dashboard 非 TTY 单帧退出）；⑫ Web SVG 成本趋势图（服务端渲染零依赖，<2 点占位）；⑬ Web 会话列表与成本明细（`/api/sessions` 分页 + 行点击展开详情）；⑭ 周环比（本周 vs 上周成本/会话/token，This Week 卡片 +12%/−8%）；黑盒 191 例
 - 安装使用流程简化：一键安装/卸载脚本、`setup` 自动合并、`uninstall`/`doctor` 子命令、`icon_set = "auto"` 零依赖字体决议
 - 国际化：自研轻量 i18n 框架（`language = "en" | "zh"` 配置键 + locales/en|zh.toml 字符串表 + 回退链）；覆盖运行时输出 / clap 帮助 / Web 仪表盘三面；`CLAUDE_HUD_CONFIG` env 测试注入
 - 批次 III 布局补全：agent-centric / kpi / contextual 三个出厂布局真实实现（此前 obsidian-command / ember-night / noir-tabbed 切换即报 `layout not implemented`）；contextual 按 subagent 活跃度动态切换 widget 集

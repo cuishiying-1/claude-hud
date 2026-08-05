@@ -115,6 +115,8 @@ pub fn send_notifications(
 /// cost ≥ cap×pct/100 的最高档位 > 已触发档位 → 触发；冷却窗口内不重复发
 /// （档位单调 + 冷却双保险：单调防回落重发，冷却防跨进程竞态）。
 /// 与 check_alerts 同用 AlertCooldown（Budget 键），触发时内部 mark_fired。
+/// 口径（用户拍板 2026-08-05）：cost/cap 均按语言选币种（zh = ¥，
+/// cap 即显示币种数值），百分比 = 语言币种成本/上限，无汇率换算。
 pub fn check_budget(
     cost: f64,
     cfg: &BudgetConfig,

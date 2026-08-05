@@ -39,6 +39,14 @@ pub struct WeeklyReport {
     pub highest_cost_usd: f64,
 }
 
+/// ⑭ 单周聚合（周环比用）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeekAgg {
+    pub cost: f64,
+    pub sessions: usize,
+    pub tokens: u64,
+}
+
 impl HistoryStore {
     /// Open or create the history database.
     pub fn open() -> Result<Self, String> {
@@ -328,6 +336,50 @@ impl HistoryStore {
             .map_err(|e| format!("query: {}", e))?;
         Ok(result)
     }
+
+    /// ⑭ 双周聚合：本周 vs 上周（SQLite %Y-%W 周键；上周 = now-7 天的周键，
+    /// 跨年自动处理）。返回 (this_week, last_week)，无会话的周为 None。
+    pub fn weekly_compare(&self) -> Result<(Option<WeekAgg>, Option<WeekAgg>), String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT strftime('%Y-%W', started_at) AS wk,
+                        COUNT(*), COALESCE(SUM(total_cost_usd),0), COALESCE(SUM(total_tokens),0)
+                 FROM sessions WHERE started_at >= datetime('now', '-14 days')
+                 GROUP BY wk",
+            )
+            .map_err(|e| format!("prepare: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as usize,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, i64>(3)? as u64,
+                ))
+            })
+            .map_err(|e| format!("query: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect::<Vec<(String, usize, f64, u64)>>();
+        let this_key: String = self
+            .conn
+            .query_row("SELECT strftime('%Y-%W', 'now')", [], |r| r.get(0))
+            .map_err(|e| format!("this week key: {}", e))?;
+        let last_key: String = self
+            .conn
+            .query_row("SELECT strftime('%Y-%W', 'now', '-7 days')", [], |r| r.get(0))
+            .map_err(|e| format!("last week key: {}", e))?;
+        let agg = |key: &str| {
+            rows.iter()
+                .find(|(wk, ..)| wk == key)
+                .map(|(_, n, c, t)| WeekAgg {
+                    cost: *c,
+                    sessions: *n,
+                    tokens: *t,
+                })
+        };
+        Ok((agg(&this_key), agg(&last_key)))
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +426,49 @@ mod tests {
         assert_eq!(r.total_tokens, 0);
         assert_eq!(r.longest_duration_secs, 0);
         assert!((r.highest_cost_usd - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn weekly_compare_both_weeks() {
+        let store = mem_store();
+        for _ in 0..2 {
+            store.record_session(&session(1.0, 500, 500, 60), 2).unwrap();
+        }
+        for days in [8, 9] {
+            let sql = format!(
+                "INSERT INTO sessions (started_at, duration_secs, total_cost_usd, \
+                 total_tokens, agent_count, model, transcript_path) \
+                 VALUES (datetime('now', '-{} days'), 60, 2.0, 1000, 1, 'm', '')",
+                days
+            );
+            store.conn.execute(&sql, []).unwrap();
+        }
+        let (this, last) = store.weekly_compare().unwrap();
+        let this = this.expect("this week present");
+        let last = last.expect("last week present");
+        assert_eq!(this.sessions, 2);
+        assert_eq!(this.cost, 2.0);
+        assert_eq!(this.tokens, 2000);
+        assert_eq!(last.sessions, 2);
+        assert_eq!(last.cost, 4.0);
+        assert_eq!(last.tokens, 2000);
+    }
+
+    #[test]
+    fn weekly_compare_empty_db_none() {
+        let store = mem_store();
+        let (this, last) = store.weekly_compare().unwrap();
+        assert_eq!(this, None);
+        assert_eq!(last, None);
+    }
+
+    #[test]
+    fn weekly_compare_no_last_week() {
+        let store = mem_store();
+        store.record_session(&session(1.0, 500, 500, 60), 2).unwrap();
+        let (this, last) = store.weekly_compare().unwrap();
+        assert!(this.is_some());
+        assert_eq!(last, None);
     }
 
     #[test]

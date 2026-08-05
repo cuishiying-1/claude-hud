@@ -54,6 +54,9 @@ enum Commands {
     /// Widget management
     #[command(subcommand)]
     Widget(WidgetCommands),
+    /// Model registry management
+    #[command(subcommand)]
+    Model(ModelCommands),
     /// Generate shell completions
     Completion {
         shell: String,
@@ -120,6 +123,10 @@ enum ModCommands {
     Import {
         file: String,
     },
+    /// Install mods from a GitHub repository's mods/ directory
+    Install {
+        repo: String,
+    },
     /// Delete a user-installed mod
     Delete {
         name: String,
@@ -144,6 +151,19 @@ enum WidgetCommands {
     List,
     /// Test a single widget
     Test { name: String },
+}
+
+#[derive(Subcommand)]
+enum ModelCommands {
+    /// Sync model registry (windows & prices) from GitHub
+    Sync,
+    /// View/set/clear CLAUDE_CODE_MAX_CONTEXT_TOKENS in settings.json env
+    Env {
+        /// Window to set (omit to view, "off" to remove)
+        arg: Option<String>,
+    },
+    /// List merged model registry (builtin + config, with source)
+    List,
 }
 
 fn main() {
@@ -219,6 +239,7 @@ fn main() {
         Commands::Mod(cmd) => handle_mod(cmd, &config, lang),
         Commands::Theme(cmd) => handle_theme(cmd, &config, lang),
         Commands::Widget(cmd) => handle_widget(cmd, &registry, lang),
+        Commands::Model(cmd) => handle_model(cmd, &config, lang),
         Commands::Completion { shell } => generate_completion(&shell, lang),
         Commands::History { weekly } => run_history(&config, weekly, lang),
         Commands::Sessions { limit, offset, date } => {
@@ -263,6 +284,7 @@ fn inject_help(cmd: clap::Command, lang: crate::core::i18n::Language) -> clap::C
                 .mut_subcommand("save", |cc| cc.about(tr(lang, "cli.mod_save")))
                 .mut_subcommand("export", |cc| cc.about(tr(lang, "cli.mod_export")))
                 .mut_subcommand("import", |cc| cc.about(tr(lang, "cli.mod_import")))
+                .mut_subcommand("install", |cc| cc.about(tr(lang, "cli.mod_install")))
                 .mut_subcommand("delete", |cc| cc.about(tr(lang, "cli.mod_delete")))
                 .mut_subcommand("reset", |cc| cc.about(tr(lang, "cli.mod_reset")))
                 .mut_subcommand("pick", |cc| cc.about(tr(lang, "cli.mod_pick")))
@@ -276,6 +298,12 @@ fn inject_help(cmd: clap::Command, lang: crate::core::i18n::Language) -> clap::C
             c.about(tr(lang, "cli.widget"))
                 .mut_subcommand("list", |cc| cc.about(tr(lang, "cli.widget_list")))
                 .mut_subcommand("test", |cc| cc.about(tr(lang, "cli.widget_test")))
+        })
+        .mut_subcommand("model", |c| {
+            c.about(tr(lang, "cli.model"))
+                .mut_subcommand("sync", |cc| cc.about(tr(lang, "cli.model_sync")))
+                .mut_subcommand("env", |cc| cc.about(tr(lang, "cli.model_env")))
+                .mut_subcommand("list", |cc| cc.about(tr(lang, "cli.model_list")))
         })
         .mut_subcommand("completion", |c| {
             c.about(tr(lang, "cli.completion"))
@@ -584,6 +612,69 @@ fn handle_mod(
                     .replace("{name}", &name)
                     .replace("{path}", &format!("{:?}", path))
             );
+        }
+        ModCommands::Install { repo } => {
+            let (mods, skipped) = crate::core::mod_install::fetch_mods(
+                &crate::core::mod_install::fetch_http,
+                &repo,
+            )?;
+            if mods.iter().any(|m| m.has_script) {
+                println!("{}", tr(lang, "runtime.mod_install_script_warning"));
+            }
+            let mut report =
+                crate::core::mod_install::write_mods(&mods, &AppConfig::mods_dir()?);
+            report.skipped.extend(skipped);
+            if report.installed.is_empty() && report.updated.is_empty() {
+                let details: Vec<String> = report
+                    .skipped
+                    .iter()
+                    .map(|(f, r)| format!("{}: {}", f, r))
+                    .collect();
+                return Err(format!(
+                    "no mods installed from {}: {}",
+                    repo,
+                    details.join(", ")
+                ));
+            }
+            for name in &report.installed {
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_install_installed").replace("{name}", name)
+                );
+            }
+            for name in &report.updated {
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_install_updated").replace("{name}", name)
+                );
+            }
+            for (file, reason) in &report.skipped {
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_install_skipped")
+                        .replace("{name}", file)
+                        .replace("{reason}", reason)
+                );
+            }
+            let n = report.installed.len() + report.updated.len();
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_install_summary")
+                    .replace("{n}", &n.to_string())
+                    .replace("{repo}", &repo)
+            );
+            if let Some(active) = &report.activated {
+                let state_path = AppConfig::state_path()?;
+                let mut st = StateFile::read(&state_path);
+                st.previous_mod = Some(config.active_mod.clone());
+                st.write(&state_path)
+                    .map_err(|e| format!("write state: {}", e))?;
+                write_active_mod(config, active)?;
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_switched").replace("{name}", active)
+                );
+            }
         }
         ModCommands::Delete { name } => {
             let mods_dir = AppConfig::mods_dir()?;
@@ -928,6 +1019,47 @@ fn handle_widget(
     Ok(())
 }
 
+fn handle_model(
+    cmd: ModelCommands,
+    config: &AppConfig,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
+    match cmd {
+        ModelCommands::Sync => {
+            let paths = crate::core::modelsync::SyncPaths {
+                config: AppConfig::config_path()?,
+                settings: crate::core::modelsync::settings_path()?,
+            };
+            let result = crate::core::modelsync::run_sync(&paths, lang, &mut prompt_yn)?;
+            println!(
+                "{}",
+                tr(lang, "runtime.model_sync_ok")
+                    .replace("{version}", &result.version)
+                    .replace("{n}", &result.updated.len().to_string())
+            );
+            for id in &result.updated {
+                println!("  - {}", id);
+            }
+            if let Some(e) = result.env_failed {
+                println!("{}", tr(lang, "runtime.model_sync_env_fail").replace("{e}", &e));
+            }
+            Ok(())
+        }
+        ModelCommands::Env { arg } => crate::core::modelsync::model_env_cmd(config, arg.as_deref(), lang),
+        ModelCommands::List => crate::core::modelsync::model_list_cmd(config, lang),
+    }
+}
+
+/// 交互询问 [y/N]，默认 N（不写 env）。仅 Sync 命令使用。
+fn prompt_yn(prompt: &str) -> bool {
+    println!("{} [y/N]", prompt);
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map(|n| n > 0 && line.trim().eq_ignore_ascii_case("y"))
+        .unwrap_or(false)
+}
+
 /// ⑨ `history`：本周统计 / 最近会话 / 近 7 天日费用。空库显示 —，不显示 0。
 fn run_history(
     config: &AppConfig,
@@ -936,9 +1068,9 @@ fn run_history(
 ) -> Result<(), String> {
     let store = HistoryStore::open()?;
     if weekly {
-        return print_weekly_report(&store, &config.currency_symbol, lang);
+        return print_weekly_report(&store, config.currency(), lang);
     }
-    let symbol = &config.currency_symbol;
+    let symbol = config.currency();
     let weekly = store.weekly_stats()?;
     println!("{}", tr(lang, "runtime.h_weekly"));
     if weekly.total_sessions == 0 {
@@ -996,7 +1128,7 @@ fn run_sessions(
 ) -> Result<(), String> {
     let store = HistoryStore::open()?;
     println!("{}", tr(lang, "runtime.h_sessions_title"));
-    let symbol = &config.currency_symbol;
+    let symbol = config.currency();
     let rows = store.sessions_page(limit, offset, date_from)?;
     if rows.is_empty() {
         println!("  —");
@@ -1031,7 +1163,7 @@ fn run_session(
     let Some(r) = store.session_by_id(sid)? else {
         return Err(tr(lang, "runtime.h_session_not_found").replace("{id}", id));
     };
-    let symbol = &config.currency_symbol;
+    let symbol = config.currency();
     println!("{}", tr(lang, "runtime.h_session_title").replace("{id}", &r.id.to_string()));
     println!("{}", tr(lang, "runtime.h_session_model").replace("{model}", &r.model));
     println!(

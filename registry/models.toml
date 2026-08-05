@@ -1,0 +1,101 @@
+# claude-hud 模型注册表（官方调价/新模型时提交更新，提交即生效，不必发版）
+# 用法：claude-hud model sync
+registry_version = "2026-08-05"
+
+[models."claude-opus-4-7"]
+context_window = 200000
+[models."claude-opus-4-7".price_usd]
+input = 5.0e-6
+output = 25.0e-6
+cache_read = 0.5e-6
+cache_creation = 6.25e-6
+
+[models."claude-opus-4-5"]
+context_window = 200000
+[models."claude-opus-4-5".price_usd]
+input = 5.0e-6
+output = 25.0e-6
+cache_read = 0.5e-6
+cache_creation = 6.25e-6
+
+[models."claude-sonnet-4-6"]
+context_window = 200000
+[models."claude-sonnet-4-6".price_usd]
+input = 3.0e-6
+output = 15.0e-6
+cache_read = 0.3e-6
+cache_creation = 3.75e-6
+
+[models."claude-sonnet-4-5"]
+context_window = 200000
+[models."claude-sonnet-4-5".price_usd]
+input = 3.0e-6
+output = 15.0e-6
+cache_read = 0.3e-6
+cache_creation = 3.75e-6
+
+[models."claude-haiku-4-5-20251001"]
+context_window = 200000
+[models."claude-haiku-4-5-20251001".price_usd]
+input = 1.0e-6
+output = 5.0e-6
+cache_read = 0.1e-6
+cache_creation = 1.25e-6
+
+[models."claude-haiku-4-5"]
+context_window = 200000
+[models."claude-haiku-4-5".price_usd]
+input = 1.0e-6
+output = 5.0e-6
+cache_read = 0.1e-6
+cache_creation = 1.25e-6
+
+[models."claude-3-5-sonnet"]
+context_window = 200000
+[models."claude-3-5-sonnet".price_usd]
+input = 3.0e-6
+output = 15.0e-6
+cache_read = 0.3e-6
+cache_creation = 3.75e-6
+
+[models."claude-3-5-haiku"]
+context_window = 200000
+[models."claude-3-5-haiku".price_usd]
+input = 0.8e-6
+output = 4.0e-6
+cache_read = 0.08e-6
+cache_creation = 1.0e-6
+
+[models."claude-3-opus"]
+context_window = 200000
+[models."claude-3-opus".price_usd]
+input = 15.0e-6
+output = 75.0e-6
+cache_read = 1.5e-6
+cache_creation = 18.75e-6
+
+[models."deepseek-v4-flash"]
+context_window = 1000000
+[models."deepseek-v4-flash".price_usd]
+input = 0.14e-6
+output = 0.28e-6
+cache_read = 0.0028e-6
+cache_creation = 0.175e-6
+[models."deepseek-v4-flash".price_cny]
+input = 1.0e-6
+output = 2.0e-6
+cache_read = 0.02e-6
+cache_creation = 1.25e-6
+
+[models."deepseek-v4-pro"]
+context_window = 1000000
+[models."deepseek-v4-pro".price_usd]
+input = 0.435e-6
+output = 0.87e-6
+cache_read = 0.003625e-6
+cache_creation = 0.54375e-6
+[models."deepseek-v4-pro".price_cny]
+input = 3.0e-6
+output = 6.0e-6
+cache_read = 0.06e-6
+cache_creation = 3.75e-6

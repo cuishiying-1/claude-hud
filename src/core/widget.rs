@@ -10,6 +10,9 @@ pub struct WidgetConfig {
     pub values: std::collections::HashMap<String, String>,
     /// 全局语言注入（config.widget_config 构建时写入；默认 En）。
     pub lang: crate::core::i18n::Language,
+    /// 当前紧凑布局是否含 context_bar（widget_config 构建时写入）。
+    /// cost_display 用它做 token 去重：显式 show_tokens 键优先，否则同屏自动隐藏。
+    pub context_bar_present: bool,
 }
 
 impl WidgetConfig {
@@ -44,6 +47,7 @@ impl Default for WidgetConfig {
         Self {
             values: std::collections::HashMap::new(),
             lang: crate::core::i18n::Language::En,
+            context_bar_present: false,
         }
     }
 }

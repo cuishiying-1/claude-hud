@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
 use crossterm::event::{self, Event, KeyCode};
@@ -27,12 +27,20 @@ use crate::core::theme::Theme;
 use crate::core::transcript::{TranscriptReader, TranscriptSummary};
 use crate::core::widget::WidgetRegistry;
 
+/// 刷新间隔下限：防存量配置 refresh_interval_ms = 0 造成忙轮询（100% CPU）。
+const MIN_REFRESH_MS: u64 = 50;
+
 /// Launch the full-screen ratatui dashboard.
 pub fn run(
     registry: &WidgetRegistry,
     config: &AppConfig,
     theme: &Theme,
 ) -> Result<(), String> {
+    // ⑪ 非 TTY（黑盒/管道）：固定视口画一帧即退出，不进入 raw mode /
+    // alt screen（原行为会一直运行到外部超时）。不 record session。
+    if !io::stdout().is_terminal() {
+        return render_single_frame(registry, config, theme);
+    }
     enable_raw_mode().map_err(|e| format!("enable raw mode: {}", e))?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)
@@ -57,10 +65,12 @@ fn run_loop(
     theme: &Theme,
 ) -> Result<(), String> {
     let lang = config.language();
-    let tick_rate = std::time::Duration::from_millis(config.dashboard.refresh_interval_ms);
+    let tick_rate = std::time::Duration::from_millis(effective_refresh_ms(
+        config.dashboard.refresh_interval_ms,
+    ));
     let mut last_agent_count: usize = 0;
     let mut notified_stalled: HashSet<String> = HashSet::new();
-    let mut layout_name = config.dashboard.default_layout.clone();
+    let mut layout_name = normalize_layout(&config.dashboard.default_layout);
     let mut tab_idx: usize = 0;
     let mut show_help = false;
 
@@ -70,6 +80,8 @@ fn run_loop(
         .snapshot
         .to_session_if_fresh(state::now_secs())
         .unwrap_or_default();
+    // v0.7 窗口单点解析：快照恢复后同样覆盖 200k 兜底（一次生效全线消费点）
+    pricing::resolve_context_window(&mut data, config);
     let mut transcript_reader: Option<TranscriptReader> = if initial.transcript.path.is_empty() {
         None
     } else {
@@ -89,6 +101,8 @@ fn run_loop(
         // （占位显示，避免空白闪烁）。
         if let Some(d) = state::read_current_data() {
             data = d;
+            // v0.7 窗口单点解析（刷新数据同样覆盖 200k 兜底）
+            pricing::resolve_context_window(&mut data, config);
         }
 
         // Init transcript reader if we have a path
@@ -110,17 +124,19 @@ fn run_loop(
 
         // Check for notification triggers
         let fired = alert::check_alerts(&data, &config.alerts, &mut cooldown, state::now_secs());
+        // 预算口径（用户拍板 2026-08-05）：告警成本按语言选币种（zh = ¥），
+        // 与 compact 管线一致，不再直接查 [pricing]（USD 语义）。
         let effective_cost = pricing::effective_cost(
             &data,
             summary.as_ref().unwrap_or(&TranscriptSummary::default()),
-            &config.pricing,
+            &pricing::merged_pricing(config),
         )
         .0;
         alert::send_notifications(
             &fired,
             &data,
             &config.alerts,
-            &config.currency_symbol,
+            config.currency(),
             effective_cost,
             lang,
         );
@@ -218,6 +234,21 @@ pub fn next_layout(cur: &str) -> String {
         "tabbed" => "grid-2x2".to_string(),
         _ => "grid-2x2".to_string(),
     }
+}
+
+/// ⑯ 布局名归一化：未知/空值回退 grid-2x2（与 next_layout 兜底一致），
+/// 防止存量配置 default_layout = "" 时 footer 显示空白。
+pub fn normalize_layout(name: &str) -> String {
+    if matches!(name, "grid-2x2" | "sidebar" | "focus" | "tabbed") {
+        name.to_string()
+    } else {
+        "grid-2x2".to_string()
+    }
+}
+
+/// 刷新间隔钳制：refresh_interval_ms 下限 50ms，避免 0 值忙轮询。
+pub fn effective_refresh_ms(ms: u64) -> u64 {
+    ms.max(MIN_REFRESH_MS)
 }
 
 /// tab 切换（wrap）：dir>0 右移，dir<0 左移；len=0 → 0。
@@ -470,6 +501,38 @@ fn render_help(frame: &mut Frame, area: ratatui::layout::Rect, config: &AppConfi
     );
 }
 
+/// ⑪ 非 TTY 单帧：固定 100x30 视口（crossterm size() 在非 TTY 报错，
+/// 用 Viewport::Fixed 兜底）画一次当前布局，供黑盒断言 dashboard 内容。
+fn render_single_frame(
+    registry: &WidgetRegistry,
+    config: &AppConfig,
+    theme: &Theme,
+) -> Result<(), String> {
+    use ratatui::layout::Rect as RRect;
+    use ratatui::TerminalOptions;
+    use ratatui::Viewport;
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = ratatui::Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Fixed(RRect::new(0, 0, 100, 30)),
+        },
+    )
+    .map_err(|e| format!("single-frame terminal: {}", e))?;
+    let mut data = state::read_current_data().unwrap_or_default();
+    // v0.7 窗口单点解析（单帧路径同样覆盖 200k 兜底）
+    pricing::resolve_context_window(&mut data, config);
+    let layout_name = normalize_layout(&config.dashboard.default_layout);
+    terminal
+        .draw(|frame| {
+            draw_dashboard(
+                frame, registry, &data, theme, config, None, &layout_name, 0, false,
+            );
+        })
+        .map_err(|e| format!("single-frame draw: {}", e))?;
+    terminal.flush().map_err(|e| format!("single-frame flush: {}", e))
+}
+
 /// ⑯ 读-改-写 config.toml 的 dashboard.default_layout；失败 eprintln 警告不中断。
 /// TOML 往返会丢失注释（拍板取舍，doctor 与文档提示）。
 fn persist_layout(layout: &str) {
@@ -535,6 +598,25 @@ mod tests {
     fn next_layout_unknown_starts_from_grid() {
         assert_eq!(next_layout(""), "grid-2x2");
         assert_eq!(next_layout("weird"), "grid-2x2");
+    }
+
+    #[test]
+    fn normalize_layout_keeps_known_names() {
+        for name in ["grid-2x2", "sidebar", "focus", "tabbed"] {
+            assert_eq!(normalize_layout(name), name);
+        }
+    }
+
+    #[test]
+    fn normalize_layout_falls_back_on_empty_or_unknown() {
+        assert_eq!(normalize_layout(""), "grid-2x2");
+        assert_eq!(normalize_layout("hex"), "grid-2x2");
+    }
+
+    #[test]
+    fn effective_refresh_ms_clamps_zero_and_keeps_larger() {
+        assert_eq!(effective_refresh_ms(0), MIN_REFRESH_MS);
+        assert_eq!(effective_refresh_ms(500), 500);
     }
 
     #[test]

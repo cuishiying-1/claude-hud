@@ -81,8 +81,21 @@ claude-hud doctor
 | `claude-hud mod pick` | 序号选择器：列出内置 + 用户 Mod，输入序号切换 |
 | `claude-hud mod export <name>` | 导出 Mod 为 .toml |
 | `claude-hud mod import <file>` | 导入 .toml 到本地库 |
+| `claude-hud mod install <user/repo>` | 从 GitHub 仓库 mods/ 目录批量安装（⑰ v0.6） |
 | `claude-hud mod delete <name>` | 删除用户 Mod |
 | `claude-hud mod reset` | 恢复出厂默认（Glacier Workstation） |
+
+#### `mod install`（⑰ v0.6）
+
+```bash
+claude-hud mod install user/repo
+```
+
+- 列出 GitHub 仓库 `mods/` 目录（contents API）并拉取全部 `.toml`，**两阶段批处理**：先全部拉取校验，再统一落盘报告。
+- `mod_info.name` 落盘前安全校验：非空、≤64 字符、仅 `[A-Za-z0-9._-]`、不与内置 Mod 重名。
+- 含 rhai/shell/http 脚本组件的 Mod 会先打印**供应链警告**，确认来源仓库可信后再使用。
+- 安装成功后自动激活字典序最大的 Mod；重复安装同名 = 更新；单条失败跳过继续，全部失败 exit 1。
+- 示例仓库结构：`mods/foo.toml`、`mods/bar.toml`（每个文件是完整 Mod 配置，含 `[mod_info]` 表）。
 
 ### 主题和 Widget
 
@@ -133,6 +146,14 @@ claude-hud session 42                        # 单会话详情
 - `session <id>` 详情：模型 / 成本 / 时长 / 代理数 / token 总量；`transcript_path` 存在时尾读 transcript 补充输入输出 token 分解与代理明细；未找到 id → stderr 报错 + exit 1。
 - **工具成本排行（估算口径）**：无逐工具 token 数据 → per_call 均摊估算（总成本 ÷ 总调用数 × 各工具调用数），行首带 `≈` 标注；模型未命中内置/用户 `[pricing]` 或零调用/零 token 时显示 `—`（诚实降级）。
 - 历史库自 0.6 起新增 `model` / `transcript_path` 两列（旧库首次打开自动 ALTER TABLE 补齐，无需迁移操作）。
+
+### 历史趋势与 Web 升级（⑪⑫⑬⑭，v0.6）
+
+- **TUI 历史趋势面板（⑪）**：dashboard 新 widget `tui_trend`（近 7 天成本柱状，`█` 字符 + 日期标签）。四种布局均通过 `compact_layout` 配置容纳（grid-2x2 / sidebar / focus / tabbed），例如 `compact_layout = ["model_display", "context_bar", "tui_trend", ...]`；历史库不可用或空时显示 `—`（诚实降级）。dashboard 在非 TTY（管道重定向）下渲染单帧后直接退出，不进入 raw mode。
+- **Web SVG 成本趋势图（⑫）**：`serve` 仪表盘 "Weekly cost trend" 卡片为服务端渲染 SVG（零依赖，不引图表库）；数据点 < 2 时显示占位提示而非空图。
+- **Web 会话列表与成本明细（⑬）**：`/api/sessions?limit=&offset=` 返回分页会话列表（复用 `sessions` 的查询口径）；`/api/sessions/{id}` 返回单会话明细（模型/成本/时长/代理/token 分解 + transcript 尾读工具明细）。前端 "Sessions" 表格行点击展开详情，加载更多分页。
+- **周环比（⑭）**：This Week 卡片显示本周 vs 上周的成本 / 会话数 / token 变化百分比（`+12%` / `−8%` / `—`）。周键口径 `%Y-%W`（ISO 周），上周 = `now - 7 days` 所在周（跨年安全）；无上周数据时对比行显示 `—`。
+- 黑盒计数：191 例。
 
 ### 状态栏成本双轨（⑲）
 

@@ -102,8 +102,10 @@ pub fn render(
     theme: &Theme,
 ) -> Result<String, String> {
     let stdin_data = read_stdin()?;
-    let data = SessionData::from_stdin_json(&stdin_data)
+    let mut data = SessionData::from_stdin_json(&stdin_data)
         .map_err(|e| format!("parse stdin JSON: {}", e))?;
+    // v0.7 窗口单点解析：真实窗口覆盖 200k 兜底（重算 pct，一次生效全线消费点）
+    pricing::resolve_context_window(&mut data, config);
     run_pipeline(&data, registry, config, theme)
 }
 
@@ -145,10 +147,12 @@ fn run_pipeline(
         &fired,
         &data,
         &config.alerts,
-        &config.currency_symbol,
+        config.currency(),
         effective_cost,
         config.language(),
     );
+    // 预算口径（用户拍板 2026-08-05）：成本/上限/百分比统一语言选币种
+    // （zh = ¥，上限即显示币种数值，无汇率换算；字段名 cap_usd 保留兼容）。
     // ⑳ 预算档位：基于实时估算成本（≈），档位单调 + 冷却跨进程去重。
     // 复用上方 realtime_cost 结果（effective_cost），不重复计算。
     let budget_tier = alert::check_budget(
@@ -164,7 +168,7 @@ fn run_pipeline(
         crate::notify::budget(
             (effective_cost / config.budget.cap_usd) * 100.0,
             config.budget.cap_usd,
-            &config.currency_symbol,
+            config.currency(),
             config.language(),
         );
     }

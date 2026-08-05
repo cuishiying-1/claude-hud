@@ -111,8 +111,10 @@ D1 = [
     # --- 回归优先：null 解析（本次修复的 bug） ---
     render_case("D1-01", "used_percentage=null", "D1",
                 {"exit": 0, "stdout_contains": ["ctx", "0%"]},
-                stdin_file="json/null_pct.json",
-                note="回归：null 不再导致解析失败"),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": None})),
+                config=DEFAULT_CONFIG,
+                note="回归：null 不再导致解析失败（v0.7：deepseek 内置 1M 窗口会重算 pct，改未收录 m 保 passthrough）"),
     render_case("D1-02", "current_usage=null", "D1",
                 {"exit": 0, "stdout_contains": ["ctx"]},
                 stdin_file="json/null_usage.json",
@@ -123,12 +125,15 @@ D1 = [
                 note="回归：修复前的典型会话早期形态"),
     # --- 正常与缺失 ---
     render_case("D1-04", "全字段数字", "D1",
-                {"exit": 0, "stdout_contains": ["deepseek-v4-flash", "3%", "0.03"],
+                {"exit": 0, "stdout_contains": ["m-model", "3%", "0.03"],
                  "stderr_empty": True},
-                stdin_file="json/full.json"),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
+                config=DEFAULT_CONFIG,
+                note="v0.7：deepseek 已内置 1M 窗口/价 → 改未收录 m 保透传 3%/0.03"),
     render_case("D1-05", "缺可选字段", "D1",
                 {"exit": 0, "stdout_contains": ["mini-model", "12%", "0.50"]},
-                stdin_file="json/minimal_ok.json"),
+                stdin_file="json/minimal_ok.json", config=DEFAULT_CONFIG,
+                note="v0.7：显式 DEFAULT_CONFIG 隔离磁盘 noir-tabbed 配置漂移"),
     render_case("D1-06", "缺 model", "D1",
                 {"exit": 1, "stderr_contains": ["error:"]},
                 stdin=j({"cost": {"total_cost_usd": 1, "total_duration_ms": 1},
@@ -163,11 +168,13 @@ D1 = [
                 stdin=j(full_dict(**{"cost.total_cost_usd": "0.5"}))),
     render_case("D1-14", "负百分比", "D1",
                 {"exit": 0, "stdout_contains": ["-5%"]},
-                stdin=j(full_dict(**{"context_window.used_percentage": -5})),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": -5})),
                 note="负百分比较原期望更宽松（预期栏位 clamp 到 0）；实测直接显示 -5%，栏位为空"),
     render_case("D1-15", "百分比 150", "D1",
                 {"exit": 0, "stdout_contains": ["150%"]},
-                stdin=j(full_dict(**{"context_window.used_percentage": 150}))),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": 150}))),
     render_case("D1-16", "超大 token 与成本", "D1",
                 {"exit": 0, "stdout_contains": ["deepseek-v4-flash"]},
                 stdin=j(full_dict(
@@ -222,23 +229,25 @@ D2 = [
                 stdin_file="json/full.json",
                 config=open(fx("config/layout_unknown.toml"), encoding="utf-8").read()),
     render_case("D2-05", "全部 13 个 widget", "D2",
-                {"exit": 0, "stdout_contains": ["deepseek-v4-flash", "ctx", "0.03"]},
-                stdin_file="json/full.json",
+                {"exit": 0, "stdout_contains": ["m-model", "ctx", "0.03"]},
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
                 env_extra={"COLUMNS": "200"},
-                config=open(fx("config/layout_all13.toml"), encoding="utf-8").read()),
+                config=open(fx("config/layout_all13.toml"), encoding="utf-8").read(),
+                note="v0.7：deepseek 已内置 → 改未收录 m 保透传 0.03"),
     render_case("D2-06", "布局顺序重排（cost 在前）", "D2",
                 {"exit": 0, "stdout_contains": ["0.03"]},
-                stdin=j(full_dict()),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
                 config=("active_mod = \"\"\n"
                         "preset = \"full\"\n"
                         "separator = \" │ \"\n"
                         "compact_layout = [\"cost_display\", \"model_display\"]\n"
                         "[runtime_overrides]\ncompact_lines = 1\n")),
     render_case("D2-07", "compact_lines=1 一行全拼", "D2",
-                {"exit": 0, "stdout_contains": ["deepseek-v4-flash", "ctx", "0.03"]},
-                stdin_file="json/full.json",
+                {"exit": 0, "stdout_contains": ["m-model", "ctx", "0.03"]},
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
                 env_extra={"COLUMNS": "200"},
-                config=open(fx("config/lines1.toml"), encoding="utf-8").read()),
+                config=open(fx("config/lines1.toml"), encoding="utf-8").read(),
+                note="v0.7：deepseek 已内置 → 改未收录 m 保透传 0.03"),
     render_case("D2-08", "compact_lines=3（6 widget）", "D2",
                 {"exit": 0, "stdout_contains": ["deepseek-v4-flash", "ctx"]},
                 stdin_file="json/full.json",
@@ -289,7 +298,8 @@ D3 = [
                         "[widgets.context_bar]\nbar_width = 5\n")),
     render_case("D3-02", "warn/critical 阈值生效", "D3",
                 {"exit": 0, "stdout_contains": ["85%"]},
-                stdin=j(full_dict(**{"context_window.used_percentage": 85})),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": 85})),
                 config=("active_mod = \"\"\n"
                         "preset = \"full\"\n"
                         "separator = \" │ \"\n"
@@ -298,14 +308,15 @@ D3 = [
                         "critical_threshold = 95\n")),
     render_case("D3-03", "阈值缺省 85% 默认色", "D3",
                 {"exit": 0, "stdout_contains": ["85%"]},
-                stdin=j(full_dict(**{"context_window.used_percentage": 85})),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": 85})),
                 config=("active_mod = \"\"\n"
                         "preset = \"full\"\n"
                         "separator = \" │ \"\n"
                         "compact_layout = [\"context_bar\"]\n")),
     render_case("D3-04", "cost_display 币种 $", "D3",
                 {"exit": 0, "stdout_contains": ["0.03"]},
-                stdin_file="json/full.json",
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
                 config=("active_mod = \"\"\n"
                         "preset = \"full\"\n"
                         "separator = \" │ \"\n"
@@ -314,7 +325,7 @@ D3 = [
                 note="currency_symbol 配置未生效，始终显示 ¥；断言改用 0.03 数字部分"),
     render_case("D3-05", "cost_display warn_threshold_usd=0.01 变色", "D3",
                 {"exit": 0, "stdout_contains": ["0.03"]},
-                stdin_file="json/full.json",
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
                 config=("active_mod = \"\"\n"
                         "preset = \"full\"\n"
                         "separator = \" │ \"\n"
@@ -411,7 +422,8 @@ D4 = [
                 note="Theme 全字段覆盖表（含 model_color 覆盖），配置可解析，覆盖路径真实生效"),
     render_case("D4-04", "bar 字符覆盖", "D4",
                 {"exit": 0, "stdout_contains": ["ctx", "#", "."]},
-                stdin=j(full_dict(**{"context_window.used_percentage": 50})),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": 50})),
                 config=("active_mod = \"\"\n"
                         "preset = \"full\"\n"
                         "separator = \" │ \"\n"
@@ -526,14 +538,61 @@ D5 = [
 
 def serve_case(cid, name, path, expect_status, expect_ct=None,
                expect_json=False, expect_json_fields=None, post_free=False,
-               note=None):
+               expect_body_contains=None, expect_body_not_contains=None,
+               remove_db=False, prepare_db_sql=None, note=None):
     return {"id": cid, "name": name, "dim": "D6", "args": ["serve"],
             "run_kind": "serve", "path": path,
             "expect_status": expect_status, "expect_ct": expect_ct,
             "expect_json": expect_json,
             "expect_json_fields": expect_json_fields or [],
+            "expect_body_contains": expect_body_contains or [],
+            "expect_body_not_contains": expect_body_not_contains or [],
+            "remove_db": remove_db,
+            "prepare_db_sql": prepare_db_sql,
             "post_free": post_free,
             "spec": {"exit": None}, "note": note}
+
+
+def trend_db():
+    """⑫ 造 3 个不同日期各 1 条（-1/-2/-3 天，成本递增），供趋势面板/SVG。"""
+    return [
+        "INSERT INTO sessions (started_at, duration_secs, total_cost_usd, "
+        "total_tokens, agent_count, model, transcript_path) "
+        f"VALUES (datetime('now', '-{i} days'), 60, {1.0 + i * 0.5}, 500, 2, "
+        "'claude-sonnet-4-6', '')" for i in (1, 2, 3)
+    ]
+
+
+def sessions_db(n: int):
+    """⑬ 造 n 条会话（now / -1 / -2... 天，id 自增 1..n）。"""
+    return [
+        "INSERT INTO sessions (started_at, duration_secs, total_cost_usd, "
+        "total_tokens, agent_count, model, transcript_path) "
+        f"VALUES (datetime('now', '-{i} days'), {60 + i}, {0.5 + i * 0.25}, "
+        f"{1000 + i * 100}, {1 + i % 3}, 'claude-sonnet-4-6', '')"
+        for i in range(n)
+    ]
+
+
+def week_db(has_last: bool):
+    """⑭ 造双周数据：本周 2 条 $1.0/500tok；上周（可选）2 条 $2.0/500tok。"""
+    sql = []
+    for i in (0, 1):
+        sql.append(
+            "INSERT INTO sessions (started_at, duration_secs, total_cost_usd, "
+            "total_tokens, agent_count, model, transcript_path) "
+            f"VALUES (datetime('now', '-{i} days'), 60, 1.0, 500, 2, "
+            "'claude-sonnet-4-6', '')"
+        )
+    if has_last:
+        for i in (8, 9):
+            sql.append(
+                "INSERT INTO sessions (started_at, duration_secs, total_cost_usd, "
+                "total_tokens, agent_count, model, transcript_path) "
+                f"VALUES (datetime('now', '-{i} days'), 60, 2.0, 500, 1, "
+                "'claude-sonnet-4-6', '')"
+            )
+    return sql
 
 
 D6 = [
@@ -549,18 +608,80 @@ D6 = [
                note="服务就绪由 run_serve 的 5s 轮询保证；本例确认 /api/health 就绪后响应 200"),
     serve_case("D6-06", "进程退出后端口释放", "/api/health", 200,
                post_free=True),
+    serve_case("D6-08", "⑫ 趋势图 SVG 内嵌", "/", 200, "text/html; charset=utf-8",
+               expect_body_contains=["<svg", "<polyline"],
+               remove_db=True, prepare_db_sql=trend_db(),
+               note="⑫：3 个不同日期数据点 → 服务端渲染 SVG 折线内嵌 HTML"),
+    serve_case("D6-13", "⑫ 空趋势占位文本", "/", 200, "text/html; charset=utf-8",
+               expect_body_contains=["No trend data yet"],
+               expect_body_not_contains=["<svg"],
+               remove_db=True,
+               note="⑫：无历史库 → 占位（en 默认文案）"),
+    serve_case("D6-09", "⑬ /api/sessions 列表", "/api/sessions", 200,
+               expect_json=True, expect_json_fields=["sessions"],
+               expect_body_contains=['"id":3', '"id":2', '"id":1'],
+               remove_db=True, prepare_db_sql=sessions_db(3),
+               note="⑬：3 条会话 → id 降序 3/2/1"),
+    serve_case("D6-10", "⑬ /api/sessions 分页 limit", "/api/sessions?limit=1", 200,
+               expect_json=True, expect_json_fields=["sessions"],
+               expect_body_contains=['"id":3'],
+               expect_body_not_contains=['"id":2', '"id":1'],
+               remove_db=True, prepare_db_sql=sessions_db(3),
+               note="⑬：limit=1 → 仅最新 #3"),
+    serve_case("D6-11", "⑬ /api/sessions 详情", "/api/sessions/1", 200,
+               expect_json=True,
+               expect_json_fields=["model", "transcript_detail", "tools"],
+               expect_body_contains=['"model":"claude-sonnet-4-6"'],
+               remove_db=True, prepare_db_sql=sessions_db(3),
+               note="⑬：详情含 model/transcript_detail/tools（无 transcript → tools []）"),
+    serve_case("D6-12", "⑬ /api/sessions 不存在 404", "/api/sessions/99", 404,
+               remove_db=True, prepare_db_sql=sessions_db(3),
+               note="⑬：未找到 id → 404"),
+    serve_case("D6-07", "⑭ 周环比有上周数据", "/api/data", 200,
+               expect_json=True, expect_json_fields=["week_compare"],
+               expect_body_contains=['"cost_pct":-50', '"last_week"'],
+               remove_db=True, prepare_db_sql=week_db(has_last=True),
+               note="⑭：本周 2×$1.0 vs 上周 2×$2.0 → cost_pct -50（本周降 50%）"),
+    serve_case("D6-14", "⑭ 周环比无上周数据", "/api/data", 200,
+               expect_json=True, expect_json_fields=["week_compare"],
+               expect_body_contains=['"last_week":null', '"cost_pct":null'],
+               remove_db=True, prepare_db_sql=week_db(has_last=False),
+               note="⑭：只有本周 → last_week/cost_pct null（前端显示 —）"),
 ]
 
 
-def dash_case(cid, name, spec, note=None):
+def dash_case(cid, name, spec, config=None, remove_db=False,
+              prepare_db_sql=None, note=None):
     return {"id": cid, "name": name, "dim": "D7", "args": ["dashboard"],
-            "run_kind": "dashboard", "spec": spec, "note": note}
+            "run_kind": "dashboard", "spec": spec, "config": config,
+            "remove_db": remove_db, "prepare_db_sql": prepare_db_sql,
+            "note": note}
 
+
+D7_TREND_CFG = (
+    "compact_layout = [\"tui_trend\"]\n"
+    "[dashboard]\n"
+    "refresh_interval_ms = 0\n"
+    "default_layout = \"grid-2x2\"\n"
+)
 
 D7 = [
-    dash_case("D7-01", "非 TTY 优雅失败",
-              {"timed_out": True},
-              note="行为发现：dashboard 不检测非 TTY，即使 stdin=DEVNULL 仍启动 TUI 循环，10s 超时；无法断言 exit 码或 stderr"),
+    dash_case("D7-01", "非 TTY 单帧退出",
+              {"exit": 0, "stderr_empty": True},
+              note="⑪：dashboard 非 TTY 检测 → 固定视口画一帧即退出（原 10s 超时行为废弃）"),
+    dash_case("D7-02", "⑪ 趋势面板无历史库 —",
+              {"exit": 0, "stdout_contains": ["—"]},
+              config=D7_TREND_CFG, remove_db=True,
+              note="⑪：空库 → 面板占位 —（单帧帧文本在 stdout）"),
+    dash_case("D7-03", "⑪ 趋势面板有历史库柱形",
+              {"exit": 0, "stdout_contains": ["█"]},
+              config=D7_TREND_CFG, prepare_db_sql=trend_db(),
+              note="⑪：3 天数据 → 柱形字符 █"),
+    dash_case("D7-04", "⑪ sidebar 布局趋势面板",
+              {"exit": 0, "stdout_contains": ["█"]},
+              config=D7_TREND_CFG.replace("grid-2x2", "sidebar"),
+              prepare_db_sql=trend_db(),
+              note="⑪：sidebar 布局容纳趋势面板（三种非 tabbed 布局抽查）"),
 ]
 
 
@@ -665,7 +786,8 @@ P2 = [
                  "stderr_empty": True},
                 stdin_file="json/camel_contract.json",
                 config=DEFAULT_CONFIG,
-                note="任务③：subagentStatusLine alias + five_hour_pct 扁平形态解析"),
+                env_extra={"COLUMNS": "120"},
+                note="任务③：subagentStatusLine alias + five_hour_pct 扁平形态解析；COLUMNS=120 避免紧凑 token 标注加长后 80 列截断丢组"),
     render_case("P2-02", "render --dump 键分类", "P2",
                 {"exit": 0, "stdout_contains": ["recognized", "unknown",
                                                 "session_id", "exceeds_200k_tokens"]},
@@ -708,11 +830,13 @@ P2 = [
     render_case("P2-06", "无 [pricing] 透传官方价", "P2",
                 {"exit": 0, "stdout_contains": ["$0.03"],
                  "stdout_not_contains": ["≈"]},
-                stdin_file="json/full.json", config=DEFAULT_CONFIG,
-                note="任务⑭：未命中 → 透传 data.cost.total_cost_usd，无 ≈"),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
+                config=DEFAULT_CONFIG,
+                note="任务⑭：未命中 → 透传 data.cost.total_cost_usd，无 ≈（v0.7：deepseek 已内置，改未收录 m）"),
     render_case("P2-07", "currency_symbol 全局生效", "P2",
                 {"exit": 0, "stdout_contains": ["¥0.03"]},
-                stdin_file="json/full.json", config=(
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
+                config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
                     "separator = \" │ \"\n"
@@ -722,7 +846,7 @@ P2 = [
                     "[widgets]\n"),
                 note="任务⑭：顶层 currency_symbol 注入 cost_display（compact 路径代表四处接线）"),
     render_case("P2-08", "context_bar tokens k 缩写", "P2",
-                {"exit": 0, "stdout_contains": ["6.8k/5.0k tok"]},
+                {"exit": 0, "stdout_contains": ["6.8k in / 5.0k out tok"]},
                 stdin_file="json/full.json", config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
@@ -743,6 +867,10 @@ P2 = [
                     "[pricing]\n"
                     "\"neg-model\" = { input = -0.000001 }\n"),
                 note="任务⑭：负单价 → [!!] failure 含模型名定位"),
+    render_case("P2-11", "内置 deepseek 窗口/定价重算", "P2",
+                {"exit": 0, "stdout_contains": ["1%", "≈$0.00"]},
+                stdin_file="json/full.json", config=DEFAULT_CONFIG,
+                note="v0.7：deepseek 内置 1M 窗口 + 内置价 → pct 重算 1%（11800/1M）、成本实时 ≈$0.00；透传语义由 P2-06（m）覆盖"),
 ]
 
 # --- Phase 3（任务⑤⑥⑦ 配置契约）---
@@ -876,9 +1004,10 @@ P3 = [
                 pre_cmds=[["mod", "save", "snap-w"]],
                 note="任务⑥：save 生成快照含 compact_widgets 数组，export 原样输出"),
     render_case("P3-10", "mod save→use 自定义数组渲染一致", "P3",
-                {"exit": 0, "stdout_contains": ["deepseek-v4-flash",
+                {"exit": 0, "stdout_contains": ["m-model",
                                                 "$0.03"]},
-                stdin=j(full_dict()), config=(
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
+                config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
                     "separator = \" │ \"\n"
@@ -925,7 +1054,8 @@ P3 = [
     render_case("P3-15", "cost_display 符号+数字整体在色内", "P3",
                 {"exit": 0,
                  "stdout_raw_regex": r"\x1b\[38;2;[0-9;]+m\$[0-9.]+[^\x1b]*"},
-                stdin_file="json/full.json", config=(
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
+                config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
                     "separator = \" │ \"\n"
@@ -964,11 +1094,12 @@ P4 = [
                 note="⑮：columns_env clamp 到 40，fit_line 从行尾丢组直至 ≤40 列"),
     render_case("P4-08", "COLUMNS=200 → 输出完整无截断", "P4",
                 {"exit": 0,
-                 "stdout_contains": ["deepseek-v4-flash", "$0.03"],
+                 "stdout_contains": ["m-model", "$0.03"],
                  "stdout_not_contains": ["..."]},
-                stdin_file="json/full.json", config=DEFAULT_CONFIG,
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
+                config=DEFAULT_CONFIG,
                 env_extra={"COLUMNS": "200"},
-                note="⑮：宽终端（≥120 列）与无 COLUMNS 行为一致——不丢组、无 truncate 省略号"),
+                note="⑮：宽终端（≥120 列）与无 COLUMNS 行为一致——不丢组、无 truncate 省略号（v0.7：deepseek 已内置 → m 保透传）"),
     render_case("P4-05", "mod use 输出全局生效提示", "P4",
                 {"exit": 0, "stdout_contains": ["(applies to all windows)"]},
                 args=["mod", "use", "ember-night"], config=DEFAULT_CONFIG,
@@ -990,7 +1121,7 @@ P4 = [
 # P5-04 首次触发会发一次真实 OS 通知（budget 通知接线；可接受）。
 P5 = [
     render_case("P5-01", "[pricing] 实时命中 ≈$ 合并组", "P5",
-                {"exit": 0, "stdout_contains": ["≈$16.80 · 6.8k/5.0k tok"]},
+                {"exit": 0, "stdout_contains": ["≈$16.80 · 6.8k in / 5.0k out tok"]},
                 stdin=j(full_dict()), config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
@@ -1002,20 +1133,22 @@ P5 = [
                     "\"deepseek-v4-flash\" = { input = 0.001, output = 0.002 }\n"),
                 note="⑲：stdin 累计 6800/5000 × 单价 = 16.8 → ≈$16.80 · 6.8k/5.0k tok（实时路径无 cache → ≈）"),
     render_case("P5-02", "无 [pricing] 透传合并组", "P5",
-                {"exit": 0, "stdout_contains": ["$0.03 · 6.8k/5.0k tok"],
+                {"exit": 0, "stdout_contains": ["$0.03 · 6.8k in / 5.0k out tok"],
                  "stdout_not_contains": ["≈"]},
-                stdin_file="json/full.json", config=(
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"}})),
+                config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
                     "separator = \" │ \"\n"
                     "compact_layout = [\"cost_display\"]\n"
                     "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
                     "[widgets]\n"),
-                note="⑲：未命中 → 透传官方 0.03 无 ≈；token 组照常显示"),
+                note="⑲：未命中 → 透传官方 0.03 无 ≈；token 组照常显示（v0.7：deepseek 已内置 → m）"),
     render_case("P5-03", "网关零数据 cost_display — 降级", "P5",
                 {"exit": 0, "stdout_contains": ["—"],
                  "stdout_not_contains": ["$0.00"]},
-                stdin=j(full_dict(**{"cost.total_cost_usd": 0.0,
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "cost.total_cost_usd": 0.0,
                                      "context_window.total_input_tokens": 0,
                                      "context_window.total_output_tokens": 0})),
                 config=(
@@ -1040,7 +1173,9 @@ P5 = [
                     "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
                     "[alerts]\ncost_threshold_usd = 0\ncooldown_minutes = 10\n"
                     "[budget]\ncap_usd = 5.0\nwarn_pcts = [50, 80, 100]\n"
-                    "[widgets]\n"),
+                    "[widgets]\n"
+                    "[pricing]\n"
+                    "\"deepseek-v4-flash\" = { input = 0.001, output = 0.002 }\n"),
                 pre_render=True,
                 note="⑳：15.0 ≥ 5.0×100% → tier 3；pre 触发（发一次真实 OS 通知）后二次 render 单调保持 3"),
     render_case("P5-08", "doctor 报告预算档位与冷却", "P5",
@@ -1055,7 +1190,9 @@ P5 = [
                     "[dashboard]\nrefresh_interval_ms = 0\ndefault_layout = \"\"\n"
                     "[alerts]\ncost_threshold_usd = 0\ncooldown_minutes = 10\n"
                     "[budget]\ncap_usd = 5.0\nwarn_pcts = [50, 80, 100]\n"
-                    "[widgets]\n"),
+                    "[widgets]\n"
+                    "[pricing]\n"
+                    "\"deepseek-v4-flash\" = { input = 0.001, output = 0.002 }\n"),
                 pre_render=True,
                 note="⑳：pre_render 触发 tier 3 → doctor 读 state.json 输出档位与冷却记录（exit 不断言——statusLine 检查依赖真实环境）"),
     render_case("P5-05", "history --weekly 五指标", "P5",
@@ -1130,7 +1267,8 @@ P5 = [
     render_case("P5-12a", "渐变进度条逐 cell 渐变（默认开）", "P5",
                 {"exit": 0,
                  "stdout_contains": ["\x1b[38;2;163;190;140m", "\x1b[38;2;191;97;106m"]},
-                stdin=j(full_dict(**{"context_window.used_percentage": 90})),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": 90})),
                 config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
@@ -1144,7 +1282,8 @@ P5 = [
                 {"exit": 0,
                  "stdout_contains": ["\x1b[38;2;191;97;106m"],
                  "stdout_not_contains": ["\x1b[38;2;163;190;140m"]},
-                stdin=j(full_dict(**{"context_window.used_percentage": 97})),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": 97})),
                 config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
@@ -1157,7 +1296,8 @@ P5 = [
     render_case("P5-13a", "呼吸 env 相位 0.25 全亮", "P5",
                 {"exit": 0,
                  "stdout_contains": ["\x1b[38;2;191;97;106m"]},
-                stdin=j(full_dict(**{"context_window.used_percentage": 99})),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": 99})),
                 config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
@@ -1170,7 +1310,8 @@ P5 = [
     render_case("P5-13b", "呼吸 env 相位 0 变暗", "P5",
                 {"exit": 0,
                  "stdout_contains": ["\x1b[38;2;138;70;76m"]},
-                stdin=j(full_dict(**{"context_window.used_percentage": 99})),
+                stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
+                                     "context_window.used_percentage": 99})),
                 config=(
                     "active_mod = \"\"\n"
                     "preset = \"full\"\n"
@@ -1265,7 +1406,26 @@ P7 = [
                     "agents": [{"name": "a1", "model": "deepseek-v4-flash",
                                 "is_active": True}]}})),
                 config=mod_config("noir-tabbed"),
-                note="⑩ 有 subagent → activity 布局（含 agents 段）"),
+                env_extra={"COLUMNS": "120"},
+                note="⑩ 有 subagent → activity 布局（含 agents 段）；COLUMNS=120 避免单行 contextual 截断丢组"),
+]
+
+P8 = [
+    render_case("P8-01", "⑰ mod install 缺参 → clap 拦截", "P8",
+                {"exit": 2, "stderr_contains": ["required arguments", "REPO"]},
+                args=["mod", "install"],
+                config=DEFAULT_CONFIG,
+                note="⑰ 缺少必需位置参数，clap 用法错误（网络前拦截）"),
+    render_case("P8-02", "⑰ mod install 非法参数（无斜杠）", "P8",
+                {"exit": 1, "stderr_contains": ["error: expected <user>/<repo>"]},
+                args=["mod", "install", "bad"],
+                config=DEFAULT_CONFIG,
+                note="⑰ 无斜杠 → parse_repo_arg 拒绝（网络前校验）"),
+    render_case("P8-03", "⑰ mod install 非法参数（多个斜杠）", "P8",
+                {"exit": 1, "stderr_contains": ["error: expected <user>/<repo>"]},
+                args=["mod", "install", "a/b/c"],
+                config=DEFAULT_CONFIG,
+                note="⑰ 多于一个斜杠 → parse_repo_arg 拒绝（网络前校验）"),
 ]
 
 
@@ -1298,10 +1458,10 @@ def b1_cases():
         render_case(
             "B1-03", "① 未收录模型 → 透传（无 ≈）", "batch1",
             {"exit": 0, "stdout_not_contains": ["≈"]},
-            stdin=j(full_dict(**{"model": {"id": "deepseek-v4-flash", "display_name": "DeepSeek"},
+            stdin=j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
                                  "cost.total_cost_usd": 0.42})),
             config=DEFAULT_CONFIG,
-            note="deepseek 不在内置表 → 透传官方成本"),
+            note="v0.7：deepseek 已内置 → 未收录 m 透传官方成本"),
     ]
 
 
@@ -1542,18 +1702,21 @@ def b6_cases():
             args=["session", "1"], config=DEFAULT_CONFIG,
             pre_cmds=[
                 {"args": ["render"],
-                 "stdin": j(full_dict(**{"model": {"id": "deepseek-v4-flash", "display_name": "DeepSeek"},
+                 "stdin": j(full_dict(**{"model": {"id": "m", "display_name": "m-model"},
                                           "transcript_path": fx("transcript/tools.jsonl")}))},
                 {"args": ["render"],
                  "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
             ],
             remove_db=True, remove_state=True,
-            note="deepseek-v4-flash 不在内置表 → 未命中 → —（诚实降级）"),
+            note="v0.7：deepseek 已内置 → 未收录 m 未命中 → —（诚实降级）"),
     ]
 
 
-CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7 \
+CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7 + P8 \
     + b1_cases() + b2_cases() + b3_cases() + b4_cases() + b5_cases() + b6_cases()
 # 156 + 3（B1-01..03）+ 1（B2-01）+ 2（B3-01/02）+ 3（B4-01/02/03）+ 3（B5-01/02/03）
-#   + 12（B6-01..12 ⑤⑥⑦ 列表/详情/排行）= 180
-assert len(CASES) == 180, f"expected 180 cases, got {len(CASES)}"
+#   + 12（B6-01..12 ⑤⑥⑦ 列表/详情/排行）+ 3（D7-02..04 ⑪ 趋势面板）
+#   + 2（D6-08/13 ⑫ SVG 趋势图）+ 4（D6-09..12 ⑬ 会话列表/详情）
+#   + 2（D6-07/14 ⑭ 周环比）+ 3（P8-01..03 ⑰ mod install 参数校验）
+#   + 1（P2-11 ⑳ v0.7 内置 deepseek 语义）= 195
+assert len(CASES) == 195, f"expected 195 cases, got {len(CASES)}"

@@ -42,6 +42,23 @@ def _build_result(case, passed, detail, exit_code, timed_out, stdout,
     }
 
 
+def _prepare_db(exe_path, sqls):
+    """⑪⑫⑬⑭ 预置 history.db：先跑一次 sessions 触发 init_schema 建表，
+    再按序执行 SQL。SQLite 异常只告警不中断（避免污染全套件）。"""
+    import sqlite3
+    runner.run_exe(exe_path, ["sessions"], timeout_s=10)
+    db_path = os.path.join(runner.HUD_DIR, "history.db")
+    conn = sqlite3.connect(db_path)
+    try:
+        for sql in sqls:
+            conn.execute(sql)
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"  [WARN] prepare_db_sql failed: {e}")
+    finally:
+        conn.close()
+
+
 def prepare_case(case, tmp_dir):
     """Return stdin text for render cases (None when no stdin).
 
@@ -140,6 +157,12 @@ def run_serve(exe_path, case):
                     for field in case.get("expect_json_fields", []):
                         if field not in parsed:
                             fails.append(f"JSON missing field: {field}")
+            for want in case.get("expect_body_contains", []):
+                if want not in body:
+                    fails.append(f"body missing {want!r}")
+            for want in case.get("expect_body_not_contains", []):
+                if want in body:
+                    fails.append(f"body should not contain {want!r}")
     finally:
         proc.terminate()
         try:
@@ -209,6 +232,10 @@ def run_one(exe_path, case, tmp_dir):
         state_path = os.path.join(runner.HUD_DIR, "state.json")
         if os.path.isfile(state_path):
             os.remove(state_path)
+
+    # ⑪⑫⑬⑭：可选预置历史库数据（依赖 remove_db 已清空 + 建表在前）
+    if case.get("prepare_db_sql"):
+        _prepare_db(exe_path, case["prepare_db_sql"])
 
     # Fix 2: pre_cmd failures must not be silent — collect warnings and
     # surface them in the final detail.  A case may still PASS if its main
