@@ -1,4 +1,5 @@
 mod compact;
+mod config_tui;
 mod core;
 mod dashboard;
 mod doctor;
@@ -86,6 +87,8 @@ enum Commands {
     },
     /// All-session totals + active windows (multi-session monitor)
     Totals,
+    /// Interactive config editor (keyboard form)
+    Config,
     /// Upgrade checks
     Update {
         #[command(subcommand)]
@@ -249,6 +252,7 @@ fn main() {
         }
         Commands::Session { id } => run_session(&config, &id, lang),
         Commands::Totals => run_totals(&config, lang),
+        Commands::Config => config_tui::run(&registry, &config),
         Commands::Update { cmd } => match cmd {
             UpdateCommands::Check => {
                 let status = core::update::check_update();
@@ -327,6 +331,7 @@ fn inject_help(cmd: clap::Command, lang: crate::core::i18n::Language) -> clap::C
                 .mut_arg("id", |a| a.help(tr(lang, "cli.session_id")))
         })
         .mut_subcommand("totals", |c| c.about(tr(lang, "cli.totals")))
+        .mut_subcommand("config", |c| c.about(tr(lang, "cli.config")))
         .mut_subcommand("update", |c| {
             c.about(tr(lang, "cli.update"))
                 .mut_subcommand("check", |cc| cc.about(tr(lang, "cli.update_check")))

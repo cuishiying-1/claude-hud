@@ -15,6 +15,15 @@ impl Group {
     pub fn all() -> [Group; 4] {
         [Group::General, Group::Display, Group::Alerts, Group::Budget]
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Group::General => "config.group_general",
+            Group::Display => "config.group_display",
+            Group::Alerts => "config.group_alerts",
+            Group::Budget => "config.group_budget",
+        }
+    }
 }
 
 /// 字段类型（选项由 options_for 动态提供）。
