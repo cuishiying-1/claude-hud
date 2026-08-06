@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added — v0.9 配置编辑器
+
+- `claude-hud config`：全屏键盘表单编辑常用配置（General/Display/Alerts/Budget 四组 17 字段；Tab 切组、Enter 编辑、s 保存、q 退出；未保存修改两段式确认）
+- `serve` 新增 `GET /api/config`（schema 字段 + 当前值 + 只读价格表）、`POST /api/config`（校验 → 备份 → 保存）、`/config` 表单页（服务端渲染 + 内联 JS）
+- `AppConfig::save()`：全量校验 → 备份 `config.toml.bak` → 重建 → 原子替换；`render` 即时生效，`dashboard`/`serve` 重启生效
+- 模型价格表只读展示（TUI 与 Web），本期不编辑
+- 保存前自动备份：`~/.claude/plugins/claude-hud/config.toml.bak`
+
+### Changed
+
+- `claude-hud config` 保存会重建 config.toml（丢失手写注释，备份保留）
+- install.ps1 `HUD_LOCAL_STUB` 模式自动清理旧 claude-hud.exe（防止 PATH .EXE 优先命中旧版）
+
 ### 多会话监控（v0.8 批次，2026-08-06）
 - `totals` 命令：全会话总计（会话数/成本/token/总时长/平均）+ 最近 7 天按天分组 + 活跃窗口实时段（不计入总计）
 - render 双写 `windows/<transcript_path哈希>.json`（per-window 快照，无锁并发安全；state.json 兼容别名保留）

@@ -68,6 +68,7 @@ claude-hud doctor
 | `claude-hud history` | 跨会话历史：Weekly stats / Recent sessions / Daily cost（空库显示 `—`） |
 | `claude-hud history --weekly` | 周报五指标：会话数/成本合计/token 总量/最长时长/最高单会话（空库 `—`；成本带 `≈`） |
 | `claude-hud totals` | 全会话总计 + 活跃窗口（多会话监控，实时不计入总计） |
+| `claude-hud config` | 交互式配置编辑器（键盘表单，四组 17 字段；Tab 切组、Enter 编辑、s 保存、q 退出） |
 | `claude-hud update check` | 检查新版本（仓库无 release 或离线时输出 `not published yet` / `update check unavailable`） |
 
 ### Mod 管理
@@ -153,6 +154,15 @@ claude-hud session 42                        # 单会话详情
 - `claude-hud totals`：全会话总计（会话数/成本/token/总时长/平均）+ 最近 7 天按天 + 活跃窗口实时段（未计入总计）
 - render 每 5s 双写 `~/.claude/plugins/claude-hud/windows/<transcript_path哈希>.json`（每窗口独立文件，无锁并发安全；state.json 保留为兼容别名）
 - dashboard `windows` 布局与 Web 面板展示活跃窗口（≤10s 活跃 / ≤5min 空闲 / 之后已结束，>24h 隐藏）
+
+## 配置编辑（v0.9）
+
+- `claude-hud config`：全屏键盘表单。General/Display/Alerts/Budget 四组；Enter 行内编辑（choice 上下选择、compact_layout 空格勾选+上下排序）、s 保存、q 退出（未保存两段式确认）。
+- Web：`serve` 后访问 `http://127.0.0.1:9527/config`。表单自动从磁盘回填（`GET /api/config`），提交走 `POST /api/config`。
+- 保存语义：全量校验（language 取值、数值范围、warn_pcts 递增）→ 备份 `config.toml.bak` → 重建（丢注释）→ 原子替换。
+- 生效：`render`（每次独立进程）立即生效；`dashboard`/`serve` 常驻进程需重启。
+- 只读：模型价格表（内置 11 模型 + 用户覆盖，双币种）TUI/Web 均只读；主题表形态（`[theme]` 表）不在表单内编辑。
+- 升级不覆盖配置：install 只写 `%LOCALAPPDATA%\claude-hud\bin`，数据目录 `~/.claude/plugins/claude-hud` 不受影响。
 
 ### 历史趋势与 Web 升级（⑪⑫⑬⑭，v0.6）
 
