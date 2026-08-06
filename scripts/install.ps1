@@ -19,6 +19,10 @@ if ($UserPath -notmatch [regex]::Escape($InstallDir)) {
 $LocalStub = $env:HUD_LOCAL_STUB
 if ($LocalStub) {
     # 本地安装模式（开发/CI 冒烟）：不访问网络
+    # 清理真实安装遗留的 claude-hud.exe：Windows PATH 解析 .EXE 优先于 .CMD，
+    # 残留会导致 `claude-hud` 命中旧二进制（缺 v0.7/v0.8 子命令）。
+    $OldExe = Join-Path $InstallDir 'claude-hud.exe'
+    if (Test-Path $OldExe) { Remove-Item $OldExe -Force }
     Copy-Item $LocalStub (Join-Path $InstallDir 'claude-hud.cmd') -Force
 } else {
     # 兼容旧版 .NET：PS 5.1 需显式启用 TLS 1.2 才能访问 GitHub API

@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod ansi;
 pub mod config;
+pub mod config_schema;
 pub mod history;
 pub mod i18n;
 pub mod mod_install;
