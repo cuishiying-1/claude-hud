@@ -546,7 +546,9 @@ D5 = [
 def serve_case(cid, name, path, expect_status, expect_ct=None,
                expect_json=False, expect_json_fields=None, post_free=False,
                expect_body_contains=None, expect_body_not_contains=None,
-               remove_db=False, prepare_db_sql=None, note=None):
+               remove_db=False, prepare_db_sql=None, note=None,
+               method="GET", body=None, expect_backup=False,
+               config_path=None, config_content=None):
     return {"id": cid, "name": name, "dim": "D6", "args": ["serve"],
             "run_kind": "serve", "path": path,
             "expect_status": expect_status, "expect_ct": expect_ct,
@@ -557,6 +559,9 @@ def serve_case(cid, name, path, expect_status, expect_ct=None,
             "remove_db": remove_db,
             "prepare_db_sql": prepare_db_sql,
             "post_free": post_free,
+            "method": method, "body": body,
+            "expect_backup": expect_backup,
+            "config_path": config_path, "config_content": config_content,
             "spec": {"exit": None}, "note": note}
 
 
@@ -1474,6 +1479,26 @@ P10 = [
         "spec": {"exit": 0},
         "note": "非 TTY 单帧渲染分组标题后退出（dashboard 先例）",
     },
+    serve_case("P10-02", "GET /api/config fields+current", "/api/config", 200,
+               "application/json", expect_json=True,
+               expect_json_fields=["fields", "current", "readonly"],
+               note="schema 驱动：fields 含全部可编辑字段定义"),
+    serve_case("P10-03", "POST /api/config 保存 language=zh", "/api/config", 200,
+               "application/json", method="POST",
+               body='{"language":"zh"}',
+               expect_body_contains=["ok"],
+               expect_backup=True,
+               config_content='language = "en"\n',
+               note="克隆→set_value→save；CLAUDE_HUD_CONFIG 注入 temp 文件不污染真实配置"),
+    serve_case("P10-04", "POST 后 GET 反映新值", "/api/config", 200,
+               "application/json", expect_json=True,
+               expect_json_fields=["current"],
+               expect_body_contains=['"language":"zh"'],
+               note="GET 每次从磁盘重读（磁盘是权威）；与 P10-03 共享 temp 路径"),
+    serve_case("P10-05", "POST 非法 language=xx → 400 定位字段", "/api/config", 400,
+               "application/json", method="POST", body='{"language":"xx"}',
+               expect_body_contains=["language"],
+               note="set_value 校验失败 → 400 + 字段名"),
 ]
 
 
@@ -1768,5 +1793,6 @@ CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7
 #   + 2（D6-08/13 ⑫ SVG 趋势图）+ 4（D6-09..12 ⑬ 会话列表/详情）
 #   + 2（D6-07/14 ⑭ 周环比）+ 3（P8-01..03 ⑰ mod install 参数校验）
 #   + 1（P2-11 ⑳ v0.7 内置 deepseek 语义）+ 2（P9-01/02 ㉒ totals 总计/按天）
-#   + 1（P9-03 ㉒ totals 活跃窗口段）+ 1（P10-01 ㉓ config 单帧）= 199
-assert len(CASES) == 199, f"expected 199 cases, got {len(CASES)}"
+#   + 1（P9-03 ㉒ totals 活跃窗口段）+ 1（P10-01 ㉓ config 单帧）
+#   + 4（P10-02..05 ㉓ serve /api/config）= 203
+assert len(CASES) == 203, f"expected 203 cases, got {len(CASES)}"

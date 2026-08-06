@@ -147,6 +147,13 @@ pub fn run(
                     .unwrap();
                 let _ = request.respond(Response::from_string(body).with_header(header));
             }
+            "/api/config" => {
+                if request.method() == &tiny_http::Method::Post {
+                    handle_config_post(request, config, lang);
+                } else {
+                    handle_config_get(request, registry, lang);
+                }
+            }
             "/api/health" => {
                 let _ = request.respond(Response::from_string("OK"));
             }
@@ -159,6 +166,170 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// GET /api/config：磁盘重读（权威）+ schema fields + current + 只读价格表。
+fn handle_config_get(
+    request: tiny_http::Request,
+    registry: &WidgetRegistry,
+    lang: crate::core::i18n::Language,
+) {
+    use crate::core::config_schema;
+    let config = AppConfig::load().unwrap_or_default();
+    let mut fields_json: Vec<Value> = Vec::new();
+    for f in config_schema::fields() {
+        let mut v = json!({
+            "key": f.key,
+            "label": tr(lang, f.label),
+            "kind": match f.kind {
+                config_schema::FieldKind::Text => "text",
+                config_schema::FieldKind::Number => "number",
+                config_schema::FieldKind::Bool => "bool",
+                config_schema::FieldKind::Choice => "choice",
+                config_schema::FieldKind::Multi => "multi",
+                config_schema::FieldKind::NumberList => "list",
+            },
+            "group": f.group.name(),
+            "options": config_schema::options_for(&f, registry),
+        });
+        if let Some(min) = f.min {
+            v["min"] = json!(min);
+        }
+        if let Some(max) = f.max {
+            v["max"] = json!(max);
+        }
+        fields_json.push(v);
+    }
+    let mut current = serde_json::Map::new();
+    for f in config_schema::fields() {
+        if let Some(v) = config_schema::get_value(&config, f.key) {
+            current.insert(f.key.to_string(), json!(v));
+        }
+    }
+    let body = json!({
+        "fields": fields_json,
+        "current": current,
+        "readonly": readonly_pricing_json(&config),
+    })
+    .to_string();
+    let header = "Content-Type: application/json"
+        .parse::<tiny_http::Header>()
+        .unwrap();
+    let _ = request.respond(Response::from_string(body).with_header(header));
+}
+
+/// 只读价格表：合并 builtin + 用户 [models]/[pricing] 覆盖。
+fn readonly_pricing_json(config: &AppConfig) -> Value {
+    use crate::core::pricing;
+    let mut models = pricing::builtin_models();
+    for (id, m) in &config.models {
+        models.insert(id.clone(), m.clone());
+    }
+    let pricing_table = pricing::merged_pricing(config);
+    let mut rows: Vec<Value> = models
+        .iter()
+        .filter(|(_, m)| m.price_usd.is_some())
+        .map(|(id, m)| {
+            let p = pricing_table.get(id);
+            json!({
+                "id": id,
+                "window": m.context_window.map(|w| w.to_string()).unwrap_or_else(|| "-".into()),
+                "usd_in": p.map(|e| e.input).unwrap_or(0.0),
+                "usd_out": p.map(|e| e.output).unwrap_or(0.0),
+                "cny_in": m.price_cny.as_ref().map(|e| e.input).unwrap_or(0.0),
+                "cny_out": m.price_cny.as_ref().map(|e| e.output).unwrap_or(0.0),
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    json!({ "models": rows })
+}
+
+/// POST /api/config：JSON → 递归展开点路径 → 克隆修改 → 校验保存。
+fn handle_config_post(
+    mut request: tiny_http::Request,
+    _config: &AppConfig,
+    _lang: crate::core::i18n::Language,
+) {
+    use crate::core::config_schema;
+    use std::io::Read;
+    let mut raw = String::new();
+    let _ = request.as_reader().read_to_string(&mut raw);
+    let v: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            respond_json(request, 400, json!({"ok": false, "error": format!("bad json: {e}")}));
+            return;
+        }
+    };
+    let mut edits: Vec<(String, String)> = Vec::new();
+    flatten_json("", &v, &mut edits);
+    let mut next = AppConfig::load().unwrap_or_default();
+    for (key, raw) in &edits {
+        if let Err(e) = config_schema::set_value(&mut next, key, raw) {
+            respond_json(request, 400, json!({"ok": false, "error": e, "field": key}));
+            return;
+        }
+    }
+    let path = match AppConfig::config_path() {
+        Ok(p) => p,
+        Err(e) => {
+            respond_json(request, 500, json!({"ok": false, "error": e}));
+            return;
+        }
+    };
+    match next.save(&path) {
+        Ok(()) => {
+            respond_json(request, 200, json!({"ok": true, "backup": "config.toml.bak"}));
+        }
+        Err(e) => {
+            respond_json(request, 500, json!({"ok": false, "error": e}));
+        }
+    }
+}
+
+fn respond_json(request: tiny_http::Request, status: u16, body: Value) {
+    let header = "Content-Type: application/json"
+        .parse::<tiny_http::Header>()
+        .unwrap();
+    let _ = request.respond(
+        Response::from_string(body.to_string())
+            .with_status_code(status)
+            .with_header(header),
+    );
+}
+
+/// 嵌套 JSON → 点路径叶键。数组 → 逗号连接（multi/list 语义）。
+fn flatten_json(prefix: &str, v: &serde_json::Value, out: &mut Vec<(String, String)>) {
+    match v {
+        serde_json::Value::Object(map) => {
+            for (k, val) in map {
+                let key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                flatten_json(&key, val, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            let joined = items
+                .iter()
+                .map(|i| match i {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    _ => String::new(),
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            out.push((prefix.to_string(), joined));
+        }
+        serde_json::Value::String(s) => out.push((prefix.to_string(), s.clone())),
+        serde_json::Value::Number(n) => out.push((prefix.to_string(), n.to_string())),
+        serde_json::Value::Bool(b) => out.push((prefix.to_string(), b.to_string())),
+        serde_json::Value::Null => {}
+    }
 }
 
 fn build_api_json(

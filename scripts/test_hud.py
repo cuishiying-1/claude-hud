@@ -100,6 +100,12 @@ def run_serve(exe_path, case):
     start = time.monotonic()
     fails = []
 
+    # P10 ⑥：CLAUDE_HUD_CONFIG 注入 temp config 路径（POST 保存不碰真实配置）
+    env = dict(os.environ)
+    cfg_path = runner.prepare_config_path(case)
+    if cfg_path:
+        env["CLAUDE_HUD_CONFIG"] = cfg_path
+
     # A1: stdin=DEVNULL — serve's /api/data handler reads stdin to EOF;
     # inherited stdin from the python parent would hang the single-threaded
     # server forever.
@@ -108,6 +114,7 @@ def run_serve(exe_path, case):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
+        env=env,
     )
     status = None
     ct = ""
@@ -121,11 +128,17 @@ def run_serve(exe_path, case):
                 conn = http.client.HTTPConnection(
                     "127.0.0.1", 9527, timeout=1
                 )
-                conn.request("GET", case["path"])
+                conn.request(
+                    case.get("method", "GET"), case["path"],
+                    body=case.get("body"),
+                )
                 resp = conn.getresponse()
                 status = resp.status
                 ct = resp.getheader("Content-Type", "")
                 body = resp.read().decode("utf-8", "replace")
+                if case.get("expect_backup"):
+                    if not (cfg_path and os.path.exists(cfg_path + ".bak")):
+                        fails.append(f"backup {cfg_path}.bak 未生成")
                 conn.close()
                 break
             except OSError:

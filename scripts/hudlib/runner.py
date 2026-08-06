@@ -133,3 +133,21 @@ def write_config(toml_text: str | None):
     os.makedirs(HUD_DIR, exist_ok=True)
     with open(os.path.join(HUD_DIR, "config.toml"), "w", encoding="utf-8") as f:
         f.write(toml_text)
+
+
+def prepare_config_path(case):
+    """P10 注入：CLAUDE_HUD_CONFIG 指向 temp config（不污染真实配置）。
+
+    config_path 未指定时用共享固定路径 hud-cfg-p10.toml —— P10-03 POST
+    写入后 P10-04 GET 可读到新值（跨用例共享 = 测磁盘权威语义）。
+    config_content 提供时每次重写（确定性），否则保留磁盘现状。
+    """
+    path = case.get("config_path")
+    if not path:
+        path = os.path.join(tempfile.gettempdir(), "hud-cfg-p10.toml")
+        case["config_path"] = path
+    if case.get("config_content"):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(case["config_content"])
+    return path
