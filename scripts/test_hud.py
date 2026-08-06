@@ -100,10 +100,12 @@ def run_serve(exe_path, case):
     start = time.monotonic()
     fails = []
 
-    # P10 ⑥：CLAUDE_HUD_CONFIG 注入 temp config 路径（POST 保存不碰真实配置）
+    # P10 ⑥：仅显式声明 config_path/config_content 的用例注入 CLAUDE_HUD_CONFIG
+    # 到 temp 路径（POST 保存不碰真实配置）；其余 serve 用例保持加载真实配置。
+    uses_cfg = bool(case.get("config_path") or case.get("config_content"))
     env = dict(os.environ)
     cfg_path = runner.prepare_config_path(case)
-    if cfg_path:
+    if uses_cfg:
         env["CLAUDE_HUD_CONFIG"] = cfg_path
 
     # A1: stdin=DEVNULL — serve's /api/data handler reads stdin to EOF;
@@ -216,6 +218,27 @@ def run_serve(exe_path, case):
     )
 
 
+def run_config(exe_path, case):
+    """config TUI 非 TTY：单帧渲染后退出（与 dashboard 单帧先例一致）。"""
+    result = runner.run_exe(exe_path, case["args"], timeout_s=10)
+    fails = []
+    out = result.stdout
+    if result.exit_code != 0:
+        fails.append(f"exit: expected 0, got {result.exit_code}")
+    for want in case.get("expect_body_contains", []):
+        if want not in out:
+            fails.append(f"stdout missing {want!r}")
+    passed = not fails
+    detail = "; ".join(fails) if fails else "single-frame render ok"
+    return {
+        "id": case["id"], "dim": case["dim"], "name": case["name"],
+        "passed": passed, "detail": detail, "spec": case["spec"],
+        "exit_code": result.exit_code, "timed_out": result.timed_out,
+        "stdout": out, "stderr": result.stderr, "repro": result.repro,
+        "duration_s": result.duration_s, "note": case.get("note"),
+    }
+
+
 def run_one(exe_path, case, tmp_dir):
     """Run one case; return a result dict consumed by report.render_report.
 
@@ -308,6 +331,12 @@ def run_one(exe_path, case, tmp_dir):
             result["detail"] = (
                 "; ".join(pre_warnings) + "; " + result["detail"]
             )
+        return result
+
+    if case["run_kind"] == "config":
+        result = run_config(exe_path, case)
+        if pre_warnings:
+            result["detail"] = "; ".join(pre_warnings) + "; " + result["detail"]
         return result
 
     if case["run_kind"] == "dashboard":

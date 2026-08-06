@@ -1469,8 +1469,9 @@ P9 = [
                 note="render 写 windows/<key>.json(双写)→ totals 活跃段显示 proj [active]"),
 ]
 
-# ㉓ P10 配置编辑器（v0.9）：P10-01 Task 3 加入；P10-02..05 Task 6；
-# P10-06 Task 7。CASES 断言计数在 Task 8 统一为 204（中间值 199）。
+# ㉓ P10 配置编辑器（v0.9）：P10-01 Task 3；P10-02..05 Task 6；P10-06 Task 7。
+# 共享 temp 路径 hud-cfg-p10.toml：P10-03 POST 写入 → P10-04 GET 读回（磁盘权威），
+# P10-05 校验失败不落盘，P10-06 重写为 en 保证英文断言确定性。
 P10 = [
     {
         "id": "P10-01", "name": "config TUI 非 TTY 单帧渲染",
@@ -1803,5 +1804,5 @@ CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7
 #   + 2（D6-07/14 ⑭ 周环比）+ 3（P8-01..03 ⑰ mod install 参数校验）
 #   + 1（P2-11 ⑳ v0.7 内置 deepseek 语义）+ 2（P9-01/02 ㉒ totals 总计/按天）
 #   + 1（P9-03 ㉒ totals 活跃窗口段）+ 1（P10-01 ㉓ config 单帧）
-#   + 4（P10-02..05 ㉓ serve /api/config）= 203
+#   + 5（P10-02..06 ㉓ serve /api/config + /config 表单页）= 204
 assert len(CASES) == 204, f"expected 204 cases, got {len(CASES)}"
