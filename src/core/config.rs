@@ -222,13 +222,36 @@ fn default_true() -> bool { true }
 impl AppConfig {
     /// Load config from the standard location.
     pub fn load() -> Result<Self, String> {
-        let path = Self::config_path()?;
+        Self::load_from_path(&Self::config_path()?)
+    }
+
+    /// 从任意路径加载（测试注入 temp 路径；默认路径见 load()）。
+    pub fn load_from_path(path: &std::path::Path) -> Result<Self, String> {
         if !path.exists() {
             return Ok(Self::default());
         }
         let content =
-            fs::read_to_string(&path).map_err(|e| format!("read config: {}", e))?;
+            fs::read_to_string(path).map_err(|e| format!("read config: {}", e))?;
         toml::from_str(&content).map_err(|e| format!("parse config: {}", e))
+    }
+
+    /// 重建式保存：全量校验 → 备份 config.toml.bak → 写 tmp → 原子替换。
+    /// 丢失手写注释（用户已确认接受）；path 参数化便于测试。
+    pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        crate::core::config_schema::validate_config(self)?;
+        if path.exists() {
+            let bak = path.with_extension("toml.bak");
+            fs::copy(path, &bak).map_err(|e| format!("backup config: {}", e))?;
+        }
+        let content =
+            toml::to_string(self).map_err(|e| format!("serialize config: {}", e))?;
+        let tmp = path.with_extension("toml.tmp");
+        fs::write(&tmp, content).map_err(|e| format!("write temp: {}", e))?;
+        if path.exists() {
+            fs::remove_file(path).map_err(|e| format!("remove old: {}", e))?;
+        }
+        fs::rename(&tmp, path).map_err(|e| format!("replace config: {}", e))?;
+        Ok(())
     }
 
     /// Load a Mod package by name.
@@ -610,5 +633,47 @@ mod tests {
             "{}",
             s
         );
+    }
+
+    #[test]
+    fn save_round_trips_to_disk() {
+        let dir = std::env::temp_dir().join(format!("hud-cfg-{}-rt", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let mut c = AppConfig::default();
+        c.language = "zh".into();
+        c.save(&path).unwrap();
+        let loaded = AppConfig::load_from_path(&path).unwrap();
+        assert_eq!(loaded.language, "zh");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_creates_backup_of_original() {
+        let dir = std::env::temp_dir().join(format!("hud-cfg-{}-bak", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "language = \"en\"\n").unwrap();
+        let mut c = AppConfig::default();
+        c.language = "zh".into();
+        c.save(&path).unwrap();
+        let bak = std::fs::read_to_string(dir.join("config.toml.bak")).unwrap();
+        assert!(bak.contains("language = \"en\""), "bak = {bak}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_rejects_invalid_config_without_touching_file() {
+        let dir = std::env::temp_dir().join(format!("hud-cfg-{}-inv", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "language = \"en\"\n").unwrap();
+        let mut c = AppConfig::default();
+        c.language = "xx".into();
+        assert!(c.save(&path).is_err());
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("language = \"en\""));
+        assert!(!dir.join("config.toml.bak").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
