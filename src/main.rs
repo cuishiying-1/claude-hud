@@ -84,6 +84,8 @@ enum Commands {
         /// Session id
         id: String,
     },
+    /// All-session totals + active windows (multi-session monitor)
+    Totals,
     /// Upgrade checks
     Update {
         #[command(subcommand)]
@@ -246,6 +248,7 @@ fn main() {
             run_sessions(&config, limit, offset, date.as_deref(), lang)
         }
         Commands::Session { id } => run_session(&config, &id, lang),
+        Commands::Totals => run_totals(&config, lang),
         Commands::Update { cmd } => match cmd {
             UpdateCommands::Check => {
                 let status = core::update::check_update();
@@ -323,6 +326,7 @@ fn inject_help(cmd: clap::Command, lang: crate::core::i18n::Language) -> clap::C
             c.about(tr(lang, "cli.session"))
                 .mut_arg("id", |a| a.help(tr(lang, "cli.session_id")))
         })
+        .mut_subcommand("totals", |c| c.about(tr(lang, "cli.totals")))
         .mut_subcommand("update", |c| {
             c.about(tr(lang, "cli.update"))
                 .mut_subcommand("check", |cc| cc.about(tr(lang, "cli.update_check")))
@@ -1235,6 +1239,82 @@ fn run_session(
             }
         }
         _ => println!("{}", tr(lang, "runtime.h_tools_empty")),
+    }
+    Ok(())
+}
+
+/// 多会话监控 CLI:历史全量总和(COUNT/SUM/AVG)+ 最近 7 天按天 + 活跃窗口
+/// 实时段(实时数据未计入总和,单独列出)。
+fn run_totals(
+    config: &AppConfig,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
+    let store = HistoryStore::open()?;
+    let t = store.totals()?;
+    let symbol = config.currency();
+    println!("{}", tr(lang, "runtime.t_totals_title"));
+    println!(
+        "{}",
+        tr(lang, "runtime.t_totals_line")
+            .replace("{n}", &t.sessions.to_string())
+            .replace("{sym}", symbol)
+            .replace("{cost}", &format!("{:.2}", t.total_cost))
+            .replace("{tok}", &format_history_tokens(t.total_tokens))
+            .replace("{dur}", &format_history_duration(t.total_duration_secs))
+            .replace("{avg}", &format!("{:.1}", t.avg_duration_min))
+    );
+    println!("{}", tr(lang, "runtime.t_totals_daily_title"));
+    let daily = store.daily_totals()?;
+    if daily.is_empty() {
+        println!("  —");
+    } else {
+        for (day, cost, tokens) in daily {
+            println!(
+                "{}",
+                tr(lang, "runtime.t_totals_daily_line")
+                    .replace("{day}", &day)
+                    .replace("{sym}", symbol)
+                    .replace("{cost}", &format!("{:.2}", cost))
+                    .replace("{tok}", &format_history_tokens(tokens))
+            );
+        }
+    }
+    println!("{}", tr(lang, "runtime.t_totals_windows_title"));
+    let wins = crate::core::windows::scan_windows(crate::core::state::now_secs());
+    if wins.is_empty() {
+        println!("  —");
+    } else {
+        for w in &wins {
+            let name = if w.corrupt {
+                tr(lang, "runtime.t_win_corrupt").to_string()
+            } else {
+                w.dir_name.clone()
+            };
+            let status = match &w.status {
+                crate::core::windows::WindowStatus::Active => {
+                    tr(lang, "runtime.t_win_active")
+                }
+                crate::core::windows::WindowStatus::Idle => tr(lang, "runtime.t_win_idle"),
+                crate::core::windows::WindowStatus::Ended => {
+                    tr(lang, "runtime.t_win_ended")
+                }
+            };
+            println!(
+                "{}",
+                tr(lang, "runtime.t_totals_window_line")
+                    .replace("{name}", &name)
+                    .replace("{model}", &w.model)
+                    .replace("{pct}", &format!("{:.0}", w.used_pct))
+                    .replace("{sym}", symbol)
+                    .replace("{cost}", &format!("{:.2}", w.cost))
+                    .replace(
+                        "{tok}",
+                        &format_history_tokens(w.tokens_in + w.tokens_out)
+                    )
+                    .replace("{n}", &w.agent_count.to_string())
+                    .replace("{status}", status)
+            );
+        }
     }
     Ok(())
 }

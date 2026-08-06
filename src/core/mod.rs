@@ -14,3 +14,4 @@ pub mod widget;
 pub mod cc_config;
 pub mod state;
 pub mod update;
+pub mod windows;

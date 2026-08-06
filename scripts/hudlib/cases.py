@@ -1435,6 +1435,34 @@ P8 = [
                 note="⑰ 多于一个斜杠 → parse_repo_arg 拒绝（网络前校验）"),
 ]
 
+# --- P9 多会话监控（totals 全会话总计 + 活跃窗口）---
+P9 = [
+    render_case("P9-01", "totals 空库全 0", "P9",
+                {"exit": 0, "stdout_contains": ["All-session totals", "0 sessions"]},
+                args=["totals"], config=DEFAULT_CONFIG, remove_db=True,
+                note="totals 空库：COUNT=0 / SUM=0，标题行格式"),
+    render_case("P9-02", "totals 历史总和 + 按天分组", "P9",
+                {"exit": 0, "stdout_contains": ["All-session totals", "1 sessions",
+                                                "Daily totals"]},
+                args=["totals"], config=DEFAULT_CONFIG, remove_db=True,
+                remove_state=True,
+                pre_cmds=[
+                    {"args": ["render"],
+                     "stdin": j(full_dict(**{"transcript_path": "/a.jsonl"}))},
+                    {"args": ["render"],
+                     "stdin": j(full_dict(**{"transcript_path": "/b.jsonl"}))},
+                ],
+                note="两次 render 不同 path → 结账 1 条 → totals 显示 1 sessions + 按天段"),
+    render_case("P9-03", "totals 活跃窗口段(实时不计入)", "P9",
+                {"exit": 0, "stdout_contains": ["Active windows", "proj", "[active]"]},
+                args=["totals"], config=DEFAULT_CONFIG, remove_db=True,
+                pre_cmds=[
+                    {"args": ["render"],
+                     "stdin": j(full_dict(**{"transcript_path": "C:\\work\\proj\\s.jsonl"}))},
+                ],
+                note="render 写 windows/<key>.json(双写)→ totals 活跃段显示 proj [active]"),
+]
+
 
 def b1_cases():
     """批次 I ①：内置模型价格库。"""
@@ -1720,10 +1748,12 @@ def b6_cases():
 
 
 CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7 + P8 \
-    + b1_cases() + b2_cases() + b3_cases() + b4_cases() + b5_cases() + b6_cases()
+    + b1_cases() + b2_cases() + b3_cases() + b4_cases() + b5_cases() + b6_cases() \
+    + P9
 # 156 + 3（B1-01..03）+ 1（B2-01）+ 2（B3-01/02）+ 3（B4-01/02/03）+ 3（B5-01/02/03）
 #   + 12（B6-01..12 ⑤⑥⑦ 列表/详情/排行）+ 3（D7-02..04 ⑪ 趋势面板）
 #   + 2（D6-08/13 ⑫ SVG 趋势图）+ 4（D6-09..12 ⑬ 会话列表/详情）
 #   + 2（D6-07/14 ⑭ 周环比）+ 3（P8-01..03 ⑰ mod install 参数校验）
-#   + 1（P2-11 ⑳ v0.7 内置 deepseek 语义）= 195
-assert len(CASES) == 195, f"expected 195 cases, got {len(CASES)}"
+#   + 1（P2-11 ⑳ v0.7 内置 deepseek 语义）+ 2（P9-01/02 ㉒ totals 总计/按天）
+#   + 1（P9-03 ㉒ totals 活跃窗口段）= 198
+assert len(CASES) == 198, f"expected 198 cases, got {len(CASES)}"

@@ -230,6 +230,18 @@ fn run_pipeline(
         eprintln!("[claude-hud] warning: state write failed: {}", e);
     }
 
+    // 多会话监控:镜像写 windows/<key>.json(best-effort,失败仅警告不中断)。
+    let windows_dir = AppConfig::windows_dir().unwrap_or_default();
+    if std::fs::create_dir_all(&windows_dir).is_ok() {
+        let wpath = windows_dir.join(format!(
+            "{}.json",
+            crate::core::windows::window_key(data.transcript_path.as_deref())
+        ));
+        if let Err(e) = state.write(&wpath) {
+            eprintln!("[claude-hud] warning: window state write failed: {}", e);
+        }
+    }
+
     Ok(output)
 }
 

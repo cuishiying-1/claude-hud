@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 多会话监控（v0.8 批次，2026-08-06）
+- `totals` 命令：全会话总计（会话数/成本/token/总时长/平均）+ 最近 7 天按天分组 + 活跃窗口实时段（不计入总计）
+- render 双写 `windows/<transcript_path哈希>.json`（per-window 快照，无锁并发安全；state.json 兼容别名保留）
+- `windows` TUI 布局（活跃/空闲/已结束三态，>24h 隐藏，损坏标注）
+- Web 面板：活跃窗口卡片（/api/windows）+ 全会话汇总卡片（/api/totals），2s 轮询
+- 黑盒用例 195 → 198
+
 - 批次 VI ⑰ `mod install <user/repo>`：GitHub mods/ 目录批量安装（contents API 列目录 + raw 拉取 .toml；两阶段批处理：拉取校验 → 落盘报告）；`mod_info.name` 落盘安全校验（长度/字符集/内置名冲突）；rhai/shell/http 脚本组件供应链警告；安装后自动激活字典序最大成功 Mod；重跑 = 更新；单条失败跳过；全部失败 exit 1；⑳ 4 个新主题预设（gruvbox-dark / one-dark / github-dark / palenight，6 → 10）；黑盒 194 例
 - 批次 IV 历史趋势与 Web 升级：⑪ TUI 历史趋势面板（dashboard 新 widget `tui_trend`，近 7 天成本柱状，历史库不可用显示 `—`；dashboard 非 TTY 单帧退出）；⑫ Web SVG 成本趋势图（服务端渲染零依赖，<2 点占位）；⑬ Web 会话列表与成本明细（`/api/sessions` 分页 + 行点击展开详情）；⑭ 周环比（本周 vs 上周成本/会话/token，This Week 卡片 +12%/−8%）；黑盒 191 例
 - 安装使用流程简化：一键安装/卸载脚本、`setup` 自动合并、`uninstall`/`doctor` 子命令、`icon_set = "auto"` 零依赖字体决议

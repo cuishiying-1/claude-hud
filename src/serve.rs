@@ -121,6 +121,32 @@ pub fn run(
                     }
                 }
             }
+            "/api/windows" => {
+                let wins =
+                    crate::core::windows::scan_windows(crate::core::state::now_secs());
+                let body = windows_json(&wins).to_string();
+                let header = "Content-Type: application/json"
+                    .parse::<tiny_http::Header>()
+                    .unwrap();
+                let _ = request.respond(Response::from_string(body).with_header(header));
+            }
+            "/api/totals" => {
+                let body = match HistoryStore::open() {
+                    Ok(h) => match h.totals() {
+                        Ok(t) => {
+                            let mut v = totals_json(&t);
+                            v["currency_symbol"] = json!(config.currency());
+                            v.to_string()
+                        }
+                        Err(_) => json!({"available": false}).to_string(),
+                    },
+                    Err(_) => json!({"available": false}).to_string(),
+                };
+                let header = "Content-Type: application/json"
+                    .parse::<tiny_http::Header>()
+                    .unwrap();
+                let _ = request.respond(Response::from_string(body).with_header(header));
+            }
             "/api/health" => {
                 let _ = request.respond(Response::from_string("OK"));
             }
@@ -430,6 +456,37 @@ pub fn session_detail_json(
     })
 }
 
+/// /api/windows 响应:每窗口 dir/status/model/pct/cost/tokens/agents/corrupt。
+fn windows_json(wins: &[crate::core::windows::WindowInfo]) -> Value {
+    let arr: Vec<Value> = wins
+        .iter()
+        .map(|w| {
+            json!({
+                "dir": w.dir_name,
+                "model": w.model,
+                "pct": w.used_pct,
+                "cost": w.cost,
+                "tokens": w.tokens_in + w.tokens_out,
+                "agents": w.agent_count,
+                "corrupt": w.corrupt,
+                "status": crate::core::windows::status_name(&w.status),
+            })
+        })
+        .collect();
+    json!({ "windows": arr })
+}
+
+/// /api/totals 响应:全量 SUM + AVG(available=false 时前端显示占位)。
+fn totals_json(t: &crate::core::history::Totals) -> Value {
+    json!({
+        "sessions": t.sessions,
+        "total_cost": t.total_cost,
+        "total_tokens": t.total_tokens,
+        "total_duration_secs": t.total_duration_secs,
+        "avg_duration_min": t.avg_duration_min,
+    })
+}
+
 fn build_dashboard_html(
     _registry: &WidgetRegistry,
     config: &AppConfig,
@@ -543,6 +600,22 @@ fn build_dashboard_html(
   </div>
 </div>
 
+<div class="card" id="windows-card">
+  <div class="card-title">{web_windows_title}</div>
+  <table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <thead>
+      <tr style="color:#8b949e;text-align:left;">
+        <th>{web_w_col_status}</th><th>{web_w_col_dir}</th>
+        <th>{web_w_col_model}</th><th>{web_w_col_ctx}</th>
+        <th>{web_w_col_cost}</th><th>{web_w_col_tokens}</th>
+        <th>{web_w_col_agents}</th>
+      </tr>
+    </thead>
+    <tbody id="windows-body"></tbody>
+  </table>
+  <div id="windows-empty" class="card-detail">{web_win_none}</div>
+</div>
+
   <div class="card" id="trend-card">
     <div class="card-title">{web_cost_trend}</div>
     {web_trend_svg}
@@ -564,6 +637,11 @@ fn build_dashboard_html(
 
 <div id="widgets-area" style="margin-top:24px;"></div>
 
+<div class="card" id="totals-card" style="margin-top:24px;">
+  <div class="card-title">{web_totals_title}</div>
+  <div class="card-value" id="totals-line">—</div>
+</div>
+
 <div class="realtime">{web_realtime}</div>
 
 <script>
@@ -577,6 +655,7 @@ const T = {
   h_tools_title: "T_H_TOOLS_TITLE",
   h_tool_line: "T_H_TOOL_LINE",
   week_compare: "T_WEEK_COMPARE",
+  totals_line: "T_TOTALS_LINE",
 };
 async function refresh() {
   try {
@@ -721,6 +800,37 @@ async function toggleSessionDetail(tr, id) {
     td.textContent = T.not_found;
   }
 }
+async function loadWindows() {
+  try {
+    const d = await (await fetch('/api/windows')).json();
+    const rows = d.windows || [];
+    const tbody = document.getElementById('windows-body');
+    const empty = document.getElementById('windows-empty');
+    if (rows.length === 0) { tbody.innerHTML = ''; empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    tbody.innerHTML = rows.map(w =>
+      '<tr><td>' + w.status + '</td><td>' + w.dir + '</td><td>' + w.model + '</td>' +
+      '<td>' + Math.round(w.pct) + '%</td><td>' + w.cost.toFixed(2) + '</td>' +
+      '<td>' + w.tokens + '</td><td>' + w.agents + '</td></tr>'
+    ).join('');
+  } catch(e) { console.error('windows error:', e); }
+}
+async function loadTotals() {
+  try {
+    const d = await (await fetch('/api/totals')).json();
+    if (d.available === false) { return; }
+    const cur = d.currency_symbol || '$';
+    document.getElementById('totals-line').textContent = T.totals_line
+      .replace('{n}', d.sessions)
+      .replace('{sym}', cur)
+      .replace('{cost}', d.total_cost.toFixed(2))
+      .replace('{tok}', formatTok(d.total_tokens))
+      .replace('{avg}', d.avg_duration_min.toFixed(1));
+  } catch(e) { console.error('totals error:', e); }
+}
+loadWindows();
+loadTotals();
+setInterval(() => { loadWindows(); loadTotals(); }, 2000);
 loadSessions();
 refresh();
 setInterval(refresh, 2000);
@@ -759,6 +869,17 @@ setInterval(refresh, 2000);
         .replace("T_H_TOOLS_TITLE", tr(lang, "runtime.h_tools_title"))
         .replace("T_H_TOOL_LINE", tr(lang, "runtime.h_tool_line"))
         .replace("T_WEEK_COMPARE", tr(lang, "web.week_compare"))
+        .replace("{web_windows_title}", tr(lang, "web.windows_title"))
+        .replace("{web_win_none}", tr(lang, "web.win_none"))
+        .replace("{web_w_col_status}", tr(lang, "web.w_col_status"))
+        .replace("{web_w_col_dir}", tr(lang, "web.w_col_dir"))
+        .replace("{web_w_col_model}", tr(lang, "web.w_col_model"))
+        .replace("{web_w_col_ctx}", tr(lang, "web.w_col_ctx"))
+        .replace("{web_w_col_cost}", tr(lang, "web.w_col_cost"))
+        .replace("{web_w_col_tokens}", tr(lang, "web.w_col_tokens"))
+        .replace("{web_w_col_agents}", tr(lang, "web.w_col_agents"))
+        .replace("{web_totals_title}", tr(lang, "web.totals_title"))
+        .replace("T_TOTALS_LINE", tr(lang, "web.totals_line"))
 }
 
 
@@ -770,7 +891,9 @@ mod tests {
     use super::query_param;
     use super::session_detail_json;
     use super::sessions_list_json;
+    use super::totals_json;
     use super::trend_card_html;
+    use super::windows_json;
     use super::trend_svg;
     use super::ttl_fresh;
     use super::week_compare_json;
@@ -932,6 +1055,46 @@ mod tests {
         assert_eq!(v["sessions"][0]["model"], json!("claude-sonnet-4-6"));
         assert_eq!(v["sessions"][0]["total_cost_usd"], json!(1.25));
         assert_eq!(v["sessions"][0]["total_tokens"], json!(5000));
+    }
+
+    #[test]
+    fn windows_json_maps_fields() {
+        let mut w = crate::core::windows::WindowInfo {
+            key: "k".to_string(),
+            dir_name: "proj-a".to_string(),
+            status: crate::core::windows::WindowStatus::Active,
+            model: "op-us".to_string(),
+            used_pct: 42.0,
+            tokens_in: 1000,
+            tokens_out: 500,
+            cost: 1.25,
+            agent_count: 2,
+            ts: 0,
+            corrupt: false,
+        };
+        let v = windows_json(&[w.clone()]);
+        assert_eq!(v["windows"][0]["dir"], json!("proj-a"));
+        assert_eq!(v["windows"][0]["status"], json!("active"));
+        assert_eq!(v["windows"][0]["tokens"], json!(1500));
+        w.corrupt = true;
+        let v2 = windows_json(&[w]);
+        assert_eq!(v2["windows"][0]["corrupt"], json!(true));
+    }
+
+    #[test]
+    fn totals_json_maps_fields() {
+        let t = crate::core::history::Totals {
+            sessions: 3,
+            total_cost: 4.5,
+            total_tokens: 900,
+            total_duration_secs: 600,
+            avg_duration_min: 3.3,
+        };
+        let v = totals_json(&t);
+        assert_eq!(v["sessions"], json!(3));
+        assert_eq!(v["total_cost"], json!(4.5));
+        assert_eq!(v["total_tokens"], json!(900));
+        assert_eq!(v["total_duration_secs"], json!(600));
     }
 
     #[test]

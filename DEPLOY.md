@@ -67,6 +67,7 @@ claude-hud doctor
 | `claude-hud uninstall` | 移除 statusLine 与配置目录（卸载脚本内部调用） |
 | `claude-hud history` | 跨会话历史：Weekly stats / Recent sessions / Daily cost（空库显示 `—`） |
 | `claude-hud history --weekly` | 周报五指标：会话数/成本合计/token 总量/最长时长/最高单会话（空库 `—`；成本带 `≈`） |
+| `claude-hud totals` | 全会话总计 + 活跃窗口（多会话监控，实时不计入总计） |
 | `claude-hud update check` | 检查新版本（仓库无 release 或离线时输出 `not published yet` / `update check unavailable`） |
 
 ### Mod 管理
@@ -146,6 +147,12 @@ claude-hud session 42                        # 单会话详情
 - `session <id>` 详情：模型 / 成本 / 时长 / 代理数 / token 总量；`transcript_path` 存在时尾读 transcript 补充输入输出 token 分解与代理明细；未找到 id → stderr 报错 + exit 1。
 - **工具成本排行（估算口径）**：无逐工具 token 数据 → per_call 均摊估算（总成本 ÷ 总调用数 × 各工具调用数），行首带 `≈` 标注；模型未命中内置/用户 `[pricing]` 或零调用/零 token 时显示 `—`（诚实降级）。
 - 历史库自 0.6 起新增 `model` / `transcript_path` 两列（旧库首次打开自动 ALTER TABLE 补齐，无需迁移操作）。
+
+### 多会话监控（v0.8）
+
+- `claude-hud totals`：全会话总计（会话数/成本/token/总时长/平均）+ 最近 7 天按天 + 活跃窗口实时段（未计入总计）
+- render 每 5s 双写 `~/.claude/plugins/claude-hud/windows/<transcript_path哈希>.json`（每窗口独立文件，无锁并发安全；state.json 保留为兼容别名）
+- dashboard `windows` 布局与 Web 面板展示活跃窗口（≤10s 活跃 / ≤5min 空闲 / 之后已结束，>24h 隐藏）
 
 ### 历史趋势与 Web 升级（⑪⑫⑬⑭，v0.6）
 

@@ -47,6 +47,16 @@ pub struct WeekAgg {
     pub tokens: u64,
 }
 
+/// 多会话监控:全量历史总和(COUNT/SUM/AVG)。
+#[derive(Debug, Clone, Default)]
+pub struct Totals {
+    pub sessions: usize,
+    pub total_cost: f64,
+    pub total_tokens: u64,
+    pub total_duration_secs: u64,
+    pub avg_duration_min: f64,
+}
+
 impl HistoryStore {
     /// Open or create the history database.
     pub fn open() -> Result<Self, String> {
@@ -380,6 +390,54 @@ impl HistoryStore {
         };
         Ok((agg(&this_key), agg(&last_key)))
     }
+
+    /// 全量聚合:会话数 / 成本 / token / 时长总和 + 平均时长。
+    pub fn totals(&self) -> Result<Totals, String> {
+        let (n, cost, tok, dur): (i64, f64, i64, i64) = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(total_cost_usd),0), \
+                 COALESCE(SUM(total_tokens),0), COALESCE(SUM(duration_secs),0) \
+                 FROM sessions",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .map_err(|e| format!("totals query: {}", e))?;
+        let avg = if n > 0 {
+            (dur as f64) / 60.0 / (n as f64)
+        } else {
+            0.0
+        };
+        Ok(Totals {
+            sessions: n as usize,
+            total_cost: cost,
+            total_tokens: tok as u64,
+            total_duration_secs: dur as u64,
+            avg_duration_min: avg,
+        })
+    }
+
+    /// 最近 7 天按天:日期 / 成本 / token(全时段,非本周限定)。
+    pub fn daily_totals(&self) -> Result<Vec<(String, f64, u64)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT date(started_at), COALESCE(SUM(total_cost_usd),0), \
+                 COALESCE(SUM(total_tokens),0) FROM sessions \
+                 GROUP BY date(started_at) ORDER BY date(started_at) DESC LIMIT 7",
+            )
+            .map_err(|e| format!("daily totals prepare: {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?, r.get::<_, i64>(2)? as u64))
+            })
+            .map_err(|e| format!("daily totals query: {}", e))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("daily totals row: {}", e))?);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -539,6 +597,50 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn totals_empty_db_is_all_zeros() {
+        let h = mem_store();
+        let t = h.totals().unwrap();
+        assert_eq!(t.sessions, 0);
+        assert_eq!(t.total_cost, 0.0);
+        assert_eq!(t.total_tokens, 0);
+        assert_eq!(t.total_duration_secs, 0);
+        assert_eq!(t.avg_duration_min, 0.0);
+    }
+
+    #[test]
+    fn totals_aggregates_two_sessions() {
+        let h = mem_store();
+        h.record_session(&session(1.0, 1000, 500, 60000), 1).unwrap();
+        h.record_session(&session(3.0, 2000, 1000, 300000), 2).unwrap();
+        let t = h.totals().unwrap();
+        assert_eq!(t.sessions, 2);
+        assert_eq!(t.total_cost, 4.0);
+        assert_eq!(t.total_tokens, 4500);
+        assert_eq!(t.total_duration_secs, 360);
+        assert!((t.avg_duration_min - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn daily_totals_groups_and_orders_desc() {
+        let h = mem_store();
+        h.record_session(&session(1.0, 100, 50, 1000), 1).unwrap();
+        h.record_session(&session(2.0, 200, 60, 2000), 1).unwrap();
+        h.record_session(&session(4.0, 300, 70, 3000), 1).unwrap();
+        h.conn
+            .execute(
+                "UPDATE sessions SET started_at = datetime('now', '-1 day') WHERE id = 3",
+                [],
+            )
+            .unwrap();
+        let rows = h.daily_totals().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1, 3.0); // 今天:1.0 + 2.0
+        assert_eq!(rows[0].2, 410); // 今天:150 + 260
+        assert_eq!(rows[1].1, 4.0); // 昨天
+        assert_eq!(rows[1].2, 370);
+    }
+
     fn legacy_schema_migrates_new_columns() {
         // 旧库：sessions 表无 model/transcript_path 列 → init_schema 后列补齐
         let conn = Connection::open_in_memory().unwrap();

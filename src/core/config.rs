@@ -283,6 +283,13 @@ impl AppConfig {
         Ok(base.join(".claude").join("plugins").join("claude-hud").join("state.json"))
     }
 
+    /// 多窗口实时快照目录:每窗口一个 <key>.json(key = transcript_path 哈希)。
+    pub fn windows_dir() -> Result<PathBuf, String> {
+        let base = dirs::home_dir()
+            .ok_or_else(|| "cannot find home directory".to_string())?;
+        Ok(base.join(".claude").join("plugins").join("claude-hud").join("windows"))
+    }
+
     /// Build WidgetConfig for a given widget id from the config.
     pub fn widget_config(&self, id: &str) -> WidgetConfig {
         let mut values = HashMap::new();
@@ -592,5 +599,16 @@ mod tests {
         std::env::remove_var("CLAUDE_HUD_CONFIG");
         let p2 = AppConfig::config_path().expect("config path resolves");
         assert_ne!(p2, tmp);
+    }
+
+    #[test]
+    fn windows_dir_under_hud_dir() {
+        let dir = AppConfig::windows_dir().unwrap();
+        let s = dir.to_string_lossy().to_string();
+        assert!(
+            s.ends_with("claude-hud\\windows") || s.ends_with("claude-hud/windows"),
+            "{}",
+            s
+        );
     }
 }

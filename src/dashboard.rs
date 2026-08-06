@@ -26,6 +26,7 @@ use crate::core::state::{self, StateFile};
 use crate::core::theme::Theme;
 use crate::core::transcript::{TranscriptReader, TranscriptSummary};
 use crate::core::widget::WidgetRegistry;
+use crate::widgets::window_list;
 
 /// 刷新间隔下限：防存量配置 refresh_interval_ms = 0 造成忙轮询（100% CPU）。
 const MIN_REFRESH_MS: u64 = 50;
@@ -225,13 +226,15 @@ pub fn agents_edge(prev: usize, cur: usize) -> Option<usize> {
     }
 }
 
-/// ⑯ 'l' 键布局循环：grid-2x2 → sidebar → focus → tabbed → grid-2x2；未知值从 grid-2x2 起步。
+/// ⑯ 'l' 键布局循环：grid-2x2 → sidebar → focus → tabbed → windows → grid-2x2；
+/// 未知值从 grid-2x2 起步。
 pub fn next_layout(cur: &str) -> String {
     match cur {
         "grid-2x2" => "sidebar".to_string(),
         "sidebar" => "focus".to_string(),
         "focus" => "tabbed".to_string(),
-        "tabbed" => "grid-2x2".to_string(),
+        "tabbed" => "windows".to_string(),
+        "windows" => "grid-2x2".to_string(),
         _ => "grid-2x2".to_string(),
     }
 }
@@ -239,7 +242,7 @@ pub fn next_layout(cur: &str) -> String {
 /// ⑯ 布局名归一化：未知/空值回退 grid-2x2（与 next_layout 兜底一致），
 /// 防止存量配置 default_layout = "" 时 footer 显示空白。
 pub fn normalize_layout(name: &str) -> String {
-    if matches!(name, "grid-2x2" | "sidebar" | "focus" | "tabbed") {
+    if matches!(name, "grid-2x2" | "sidebar" | "focus" | "tabbed" | "windows") {
         name.to_string()
     } else {
         "grid-2x2".to_string()
@@ -302,6 +305,8 @@ fn draw_dashboard(
         draw_tabbed(
             frame, registry, data, theme, config, summary, main_area, tab_idx,
         );
+    } else if layout_name == "windows" {
+        window_list::draw(frame, main_area, theme, config);
     } else {
         let layout = match layout_name {
             "sidebar" => build_sidebar(main_area),
@@ -587,11 +592,12 @@ mod tests {
     }
 
     #[test]
-    fn next_layout_cycles_four_layouts() {
+    fn next_layout_cycles_five_layouts() {
         assert_eq!(next_layout("grid-2x2"), "sidebar");
         assert_eq!(next_layout("sidebar"), "focus");
         assert_eq!(next_layout("focus"), "tabbed");
-        assert_eq!(next_layout("tabbed"), "grid-2x2");
+        assert_eq!(next_layout("tabbed"), "windows");
+        assert_eq!(next_layout("windows"), "grid-2x2");
     }
 
     #[test]
@@ -601,10 +607,21 @@ mod tests {
     }
 
     #[test]
+    fn next_layout_cycles_through_windows() {
+        assert_eq!(next_layout("tabbed"), "windows");
+        assert_eq!(next_layout("windows"), "grid-2x2");
+    }
+
+    #[test]
     fn normalize_layout_keeps_known_names() {
-        for name in ["grid-2x2", "sidebar", "focus", "tabbed"] {
+        for name in ["grid-2x2", "sidebar", "focus", "tabbed", "windows"] {
             assert_eq!(normalize_layout(name), name);
         }
+    }
+
+    #[test]
+    fn normalize_layout_accepts_windows() {
+        assert_eq!(normalize_layout("windows"), "windows");
     }
 
     #[test]

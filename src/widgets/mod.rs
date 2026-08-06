@@ -14,6 +14,7 @@ pub mod skills_mcp_dynamic;
 pub mod token_attribution;
 pub mod token_rate;
 pub mod tui_trend;
+pub mod window_list;
 
 use crate::core::widget::WidgetRegistry;
 
