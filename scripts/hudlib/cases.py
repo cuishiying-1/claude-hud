@@ -31,6 +31,7 @@ P1-only keys (passed through render_case's **extra):
 """
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1494,11 +1495,19 @@ P10 = [
                "application/json", expect_json=True,
                expect_json_fields=["current"],
                expect_body_contains=['"language":"zh"'],
+               config_path=os.path.join(tempfile.gettempdir(), "hud-cfg-p10.toml"),
                note="GET 每次从磁盘重读（磁盘是权威）；与 P10-03 共享 temp 路径"),
     serve_case("P10-05", "POST 非法 language=xx → 400 定位字段", "/api/config", 400,
                "application/json", method="POST", body='{"language":"xx"}',
                expect_body_contains=["language"],
-               note="set_value 校验失败 → 400 + 字段名"),
+               config_path=os.path.join(tempfile.gettempdir(), "hud-cfg-p10.toml"),
+               note="set_value 校验失败 → 400 + 字段名；指向 temp 防误写真实配置"),
+    serve_case("P10-06", "GET /config 表单页", "/config", 200,
+               "text/html; charset=utf-8",
+               expect_body_contains=["Configuration", "id=\"cfg-form\"", "save"],
+               config_content='language = "en"\n',
+               note="服务端渲染表单：字段 input/select + 保存按钮 + JS 提交；"
+                    "重写共享 temp 文件为 en（P10-03 遗留 zh 会污染英文断言）"),
 ]
 
 
@@ -1795,4 +1804,4 @@ CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7
 #   + 1（P2-11 ⑳ v0.7 内置 deepseek 语义）+ 2（P9-01/02 ㉒ totals 总计/按天）
 #   + 1（P9-03 ㉒ totals 活跃窗口段）+ 1（P10-01 ㉓ config 单帧）
 #   + 4（P10-02..05 ㉓ serve /api/config）= 203
-assert len(CASES) == 203, f"expected 203 cases, got {len(CASES)}"
+assert len(CASES) == 204, f"expected 204 cases, got {len(CASES)}"

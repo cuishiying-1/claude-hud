@@ -154,6 +154,13 @@ pub fn run(
                     handle_config_get(request, registry, lang);
                 }
             }
+            "/config" => {
+                let html = build_config_html(registry, config, lang);
+                let header = "Content-Type: text/html; charset=utf-8"
+                    .parse::<tiny_http::Header>()
+                    .unwrap();
+                let _ = request.respond(Response::from_string(html).with_header(header));
+            }
             "/api/health" => {
                 let _ = request.respond(Response::from_string("OK"));
             }
@@ -252,7 +259,6 @@ fn handle_config_post(
     _lang: crate::core::i18n::Language,
 ) {
     use crate::core::config_schema;
-    use std::io::Read;
     let mut raw = String::new();
     let _ = request.as_reader().read_to_string(&mut raw);
     let v: serde_json::Value = match serde_json::from_str(&raw) {
@@ -1051,6 +1057,154 @@ setInterval(refresh, 2000);
         .replace("{web_w_col_agents}", tr(lang, "web.w_col_agents"))
         .replace("{web_totals_title}", tr(lang, "web.totals_title"))
         .replace("T_TOTALS_LINE", tr(lang, "web.totals_line"))
+}
+
+/// /config 表单页：服务端渲染字段控件 + 内联 JS（读 /api/config 填表、POST 提交）。
+fn build_config_html(
+    registry: &WidgetRegistry,
+    _config: &AppConfig,
+    lang: crate::core::i18n::Language,
+) -> String {
+    use crate::core::config_schema;
+    let t = |k: &'static str| tr(lang, k);
+    let mut groups_html = String::new();
+    for g in config_schema::Group::all() {
+        let mut rows = String::new();
+        for f in config_schema::fields().iter().filter(|f| f.group == g) {
+            let label = t(f.label);
+            let key = f.key;
+            let control = match f.kind {
+                config_schema::FieldKind::Choice => {
+                    let opts = config_schema::options_for(f, registry);
+                    let options: String = opts
+                        .iter()
+                        .map(|o| {
+                            format!(
+                                "<option value=\"{}\">{}</option>",
+                                html_escape(o),
+                                if o.is_empty() { t("config.none_option") } else { o }
+                            )
+                        })
+                        .collect();
+                    format!("<select id=\"{key}\" name=\"{key}\">{options}</select>")
+                }
+                config_schema::FieldKind::Bool => {
+                    format!(
+                        "<input type=\"checkbox\" id=\"{key}\" name=\"{key}\" value=\"true\">"
+                    )
+                }
+                config_schema::FieldKind::Multi => {
+                    let opts = config_schema::options_for(f, registry);
+                    let boxes: String = opts
+                        .iter()
+                        .map(|o| {
+                            format!(
+                                "<label><input type=\"checkbox\" name=\"{key}\" value=\"{}\"> {}</label> ",
+                                html_escape(o), o
+                            )
+                        })
+                        .collect();
+                    format!("<div id=\"{key}\">{boxes}</div>")
+                }
+                config_schema::FieldKind::NumberList => {
+                    format!("<input type=\"text\" id=\"{key}\" name=\"{key}\" placeholder=\"50,80,100\">")
+                }
+                _ => {
+                    format!("<input type=\"text\" id=\"{key}\" name=\"{key}\">")
+                }
+            };
+            rows.push_str(&format!("<tr><td>{label}</td><td>{control}</td></tr>"));
+        }
+        groups_html.push_str(&format!(
+            "<h3>{}</h3><table>{}</table>",
+            t(g.name()),
+            rows
+        ));
+    }
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{cfg_title}</title>
+<style>
+body {{ font-family: sans-serif; margin: 2rem; }}
+table {{ border-collapse: collapse; }}
+td {{ padding: 0.25rem 1rem 0.25rem 0; }}
+select, input[type=text] {{ min-width: 16rem; }}
+#status {{ margin-top: 1rem; font-weight: bold; }}
+.error {{ color: #c00; }}
+</style></head>
+<body>
+<h1>{cfg_title}</h1>
+<form id="cfg-form" onsubmit="return submitCfg(event)">
+{groups_html}
+<h2>{cfg_readonly}</h2>
+<div id="readonly"></div>
+<button type="submit">{cfg_save}</button>
+<span id="status"></span>
+</form>
+<script>
+const CFG_KEYS = [FIELDS_JSON];
+async function loadCfg() {{
+  const r = await fetch('/api/config');
+  const d = await r.json();
+  for (const [k, v] of Object.entries(d.current)) {{
+    const el = document.querySelector(`[name="${{k}}"]`);
+    if (!el) continue;
+    if (el.type === 'checkbox') {{ el.checked = (v === 'true'); }}
+    else if (el.tagName === 'SELECT') {{ el.value = v; }}
+    else el.value = v;
+  }}
+  const ro = d.readonly.models || [];
+  document.getElementById('readonly').innerHTML =
+    '<table><tr><th>model</th><th>window</th><th>USD in</th><th>USD out</th><th>CNY in</th><th>CNY out</th></tr>' +
+    ro.map(m => `<tr><td>${{m.id}}</td><td>${{m.window}}</td><td>${{m.usd_in}}</td><td>${{m.usd_out}}</td><td>${{m.cny_in}}</td><td>${{m.cny_out}}</td></tr>`).join('') +
+    '</table>';
+}}
+function collectCfg() {{
+  const out = {{}};
+  for (const k of CFG_KEYS) {{
+    const els = document.querySelectorAll(`[name="${{k}}"]`);
+    if (!els.length) continue;
+    if (els[0].type === 'checkbox') {{ out[k] = els[0].checked ? 'true' : 'false'; continue; }}
+    if (els.length > 1) {{ out[k] = [...els].filter(e => e.checked).map(e => e.value).join(','); continue; }}
+    out[k] = els[0].value;
+  }}
+  return out;
+}}
+async function submitCfg(ev) {{
+  ev.preventDefault();
+  const status = document.getElementById('status');
+  status.className = '';
+  try {{
+    const r = await fetch('/api/config', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(collectCfg()) }});
+    const d = await r.json();
+    if (d.ok) {{ status.textContent = '{cfg_saved}'; }}
+    else {{ status.textContent = '{cfg_error}'.replace('{{err}}', (d.field ? d.field + ': ' : '') + d.error); status.className = 'error'; }}
+  }} catch (e) {{
+    status.textContent = '{cfg_error}'.replace('{{err}}', e); status.className = 'error';
+  }}
+  return false;
+}}
+loadCfg();
+</script>
+</body></html>"#,
+        cfg_title = t("web.cfg_title"),
+        cfg_readonly = t("web.cfg_readonly_title"),
+        cfg_save = t("web.cfg_save"),
+        cfg_saved = t("web.cfg_saved"),
+        cfg_error = t("web.cfg_error"),
+    )
+    .replace("FIELDS_JSON", &{
+        let keys: Vec<String> = config_schema::fields()
+            .iter()
+            .map(|f| format!("\"{}\"", f.key))
+            .collect();
+        keys.join(",")
+    })
+}
+
+/// HTML 转义（字段选项为本地文件名/预设名，防御性转义双引号）。
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 
