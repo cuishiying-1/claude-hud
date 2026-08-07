@@ -6,7 +6,7 @@ use ratatui::style::Style;
 use ratatui::widgets::Gauge;
 
 use crate::core::ansi;
-use crate::core::i18n::tr;
+use crate::core::i18n::{tr, Language};
 use crate::core::session::SessionData;
 use crate::core::theme::Theme;
 use crate::core::transcript::TranscriptSummary;
@@ -111,8 +111,9 @@ impl Widget for ContextBar {
         let color = if pct >= 95.0 { ansi::parse_ratatui_color(&theme.danger) }
             else if pct >= warn { ansi::parse_ratatui_color(&theme.warning) }
             else { ansi::parse_ratatui_color(&theme.success) };
-        // ④ dashboard 上下文卡片同样标注（数据不足 → 无标注）。
-        let label = format!("{:.0}% — {}/{} tokens", pct, used, max);
+        // ④ dashboard 上下文卡片同样标注（数据不足 → 无标注）；
+        // 无任何用量数据时降级为占位（上游不提供 usage，0/1M 是假精确）。
+        let label = gauge_label(pct, used, max, config.lang);
         let label = if let Some(m) = self.compaction_eta(data) {
             format!(
                 "{label} · {}",
@@ -136,6 +137,16 @@ fn format_k(n: u64) -> String {
         format!("{:.1}k", n as f64 / 1000.0)
     } else {
         n.to_string()
+    }
+}
+
+/// Dashboard Gauge 标签：无任何用量数据（in+out 全 0）→ 「—」占位，
+/// 否则 `68% — 136k/200k tokens`。
+fn gauge_label(pct: f64, used: u64, max: u64, lang: Language) -> String {
+    if used == 0 {
+        tr(lang, "widget.no_data").to_string()
+    } else {
+        format!("{:.0}% — {}/{} tokens", pct, used, max)
     }
 }
 
@@ -261,5 +272,19 @@ mod tests {
         config.lang = crate::core::i18n::Language::Zh;
         let out = ContextBar::new().render_compact(&data, &Theme::default(), &config);
         assert!(out.contains("输入 1.0k / 输出 2.0k tok"), "zh labelled tokens: {}", out);
+    }
+
+    #[test]
+    fn gauge_label_placeholder_when_no_token_data() {
+        assert_eq!(gauge_label(0.0, 0, 1_000_000, Language::Zh), "—");
+        assert_eq!(gauge_label(0.0, 0, 1_000_000, Language::En), "—");
+    }
+
+    #[test]
+    fn gauge_label_shows_pct_and_tokens_when_data_present() {
+        assert_eq!(
+            gauge_label(3.4, 11_800, 200_000, Language::En),
+            "3% — 11800/200000 tokens"
+        );
     }
 }

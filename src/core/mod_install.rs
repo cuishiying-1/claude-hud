@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use crate::core::config::ModPackage;
@@ -69,7 +68,10 @@ pub fn validate_mod_name(name: &str) -> Result<(), String> {
     {
         return Err("invalid mod name".to_string());
     }
-    if BUILTIN_MODS.contains(&name) {
+    // 主题预设名同样是内置名：load_mod 先命中内置分支，同名用户 mod 永不生效
+    if BUILTIN_MODS.contains(&name)
+        || crate::core::theme::Theme::preset_names().contains(&name)
+    {
         return Err("conflicts with built-in mod".to_string());
     }
     Ok(())
@@ -242,6 +244,7 @@ pub fn write_mods(parsed: &[ParsedMod], mods_dir: &Path) -> InstallReport {
 mod tests {
     use super::*;
     use crate::core::config::ModInfo;
+    use std::collections::HashMap;
     use std::collections::HashMap as Map;
 
     fn list_url(user: &str, repo: &str) -> String {
@@ -537,6 +540,8 @@ mod tests {
     #[test]
     fn validate_name_rejects_builtin() {
         assert!(validate_mod_name("glacier-workstation").is_err());
+        assert!(validate_mod_name("dracula").is_err(), "主题预设名也是内置名");
+        assert!(validate_mod_name("nord").is_err());
     }
 
     #[test]

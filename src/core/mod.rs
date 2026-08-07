@@ -16,3 +16,5 @@ pub mod cc_config;
 pub mod state;
 pub mod update;
 pub mod windows;
+pub mod data_source;
+pub mod scanner;

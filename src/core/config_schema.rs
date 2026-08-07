@@ -49,14 +49,17 @@ pub struct FieldDef {
 }
 
 /// 全部可编辑字段（唯一事实源；const 数组使 find() 可返回 &'static）。
-const FIELDS: [FieldDef; 17] = [
+const FIELDS: [FieldDef; 20] = [
     FieldDef { key: "language", label: "config.f_language", kind: FieldKind::Choice, group: Group::General, min: None, max: None },
     FieldDef { key: "active_mod", label: "config.f_active_mod", kind: FieldKind::Choice, group: Group::General, min: None, max: None },
     FieldDef { key: "currency_symbol", label: "config.f_currency", kind: FieldKind::Text, group: Group::General, min: None, max: None },
+    FieldDef { key: "runtime_overrides.compact_lines", label: "config.f_compact_lines", kind: FieldKind::Number, group: Group::General, min: Some(1.0), max: Some(3.0) },
+    FieldDef { key: "runtime_overrides.animation.enabled", label: "config.f_animation", kind: FieldKind::Bool, group: Group::General, min: None, max: None },
     FieldDef { key: "preset", label: "config.f_preset", kind: FieldKind::Choice, group: Group::Display, min: None, max: None },
     FieldDef { key: "separator", label: "config.f_separator", kind: FieldKind::Text, group: Group::Display, min: None, max: None },
     FieldDef { key: "compact_layout", label: "config.f_layout", kind: FieldKind::Multi, group: Group::Display, min: None, max: None },
     FieldDef { key: "theme", label: "config.f_theme", kind: FieldKind::Choice, group: Group::Display, min: None, max: None },
+    FieldDef { key: "theme.icon_set", label: "config.f_icon_set", kind: FieldKind::Choice, group: Group::Display, min: None, max: None },
     FieldDef { key: "dashboard.refresh_interval_ms", label: "config.f_refresh", kind: FieldKind::Number, group: Group::Display, min: Some(0.0), max: None },
     FieldDef { key: "dashboard.default_layout", label: "config.f_default_layout", kind: FieldKind::Choice, group: Group::Display, min: None, max: None },
     FieldDef { key: "dashboard.scanlines", label: "config.f_scanlines", kind: FieldKind::Bool, group: Group::Display, min: None, max: None },
@@ -89,6 +92,12 @@ pub fn options_for(f: &FieldDef, registry: &WidgetRegistry) -> Vec<String> {
             .iter()
             .map(|s| s.to_string())
             .collect();
+            // 主题预设作为轻量内置 mod（与 mod list / load_mod 口径一致）
+            for p in Theme::preset_names() {
+                if !out.iter().any(|s| s == p) {
+                    out.push(p.to_string());
+                }
+            }
             if let Ok(dir) = AppConfig::mods_dir() {
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for e in entries.filter_map(|e| e.ok()) {
@@ -109,6 +118,9 @@ pub fn options_for(f: &FieldDef, registry: &WidgetRegistry) -> Vec<String> {
             v.insert(0, String::new());
             v
         }
+        "theme.icon_set" => vec![
+            "auto".into(), "nerd".into(), "ascii".into(), "minimal".into(),
+        ],
         "dashboard.default_layout" => vec![
             "grid-2x2".into(), "sidebar".into(), "focus".into(),
             "tabbed".into(), "windows".into(),
@@ -159,6 +171,34 @@ pub fn get_value(config: &AppConfig, key: &str) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join(","),
         ),
+        "runtime_overrides.compact_lines" => {
+            let n = config
+                .runtime_overrides
+                .as_ref()
+                .and_then(|r| r.compact_lines);
+            Some(match n {
+                Some(n) if n > 0 => n.to_string(),
+                _ => String::new(),
+            })
+        }
+        "runtime_overrides.animation.enabled" => {
+            let b = config
+                .runtime_overrides
+                .as_ref()
+                .and_then(|r| r.animation.as_ref())
+                .and_then(|a| a.enabled);
+            Some(b.map_or("true".into(), |v| v.to_string()))
+        }
+        "theme.icon_set" => {
+            let v = config.theme.as_ref().and_then(|t| match t {
+                super::theme::ThemeRef::Table(tbl) => tbl
+                    .colors
+                    .get("icon_set")
+                    .and_then(|v| v.as_str().map(String::from)),
+                super::theme::ThemeRef::Preset(_) => None,
+            });
+            Some(v.unwrap_or_else(|| "auto".into()))
+        }
         _ => None,
     }
 }
@@ -276,9 +316,75 @@ pub fn set_value(config: &mut AppConfig, key: &str, raw: &str) -> Result<(), Str
             }
             config.budget.warn_pcts = vals;
         }
+        "runtime_overrides.compact_lines" => {
+            if raw.is_empty() || raw == "0" {
+                if let Some(ro) = &mut config.runtime_overrides {
+                    ro.compact_lines = None;
+                }
+            } else {
+                let v = parse_num(f, raw)? as u8;
+                config
+                    .runtime_overrides
+                    .get_or_insert_with(super::config::RuntimeOverrides::default)
+                    .compact_lines = Some(v);
+            }
+            cleanup_runtime_overrides(config);
+        }
+        "runtime_overrides.animation.enabled" => {
+            let b = parse_bool(key, raw)?;
+            if b {
+                if let Some(ro) = &mut config.runtime_overrides {
+                    if let Some(anim) = &mut ro.animation {
+                        anim.enabled = None;
+                    }
+                }
+            } else {
+                let ro = config
+                    .runtime_overrides
+                    .get_or_insert_with(super::config::RuntimeOverrides::default);
+                ro.animation
+                    .get_or_insert_with(super::config::AnimationOverrides::default)
+                    .enabled = Some(false);
+            }
+            cleanup_runtime_overrides(config);
+        }
+        "theme.icon_set" => {
+            let mut tbl = match config.theme.take() {
+                Some(super::theme::ThemeRef::Table(t)) => t,
+                Some(super::theme::ThemeRef::Preset(name)) => super::theme::ThemeTable {
+                    preset: Some(name),
+                    ..Default::default()
+                },
+                None => super::theme::ThemeTable::default(),
+            };
+            if raw.is_empty() || raw == "auto" {
+                tbl.colors.remove("icon_set");
+            } else {
+                tbl.colors
+                    .insert("icon_set".into(), toml::Value::String(raw.into()));
+            }
+            if tbl.colors.is_empty() && tbl.overrides.is_none() {
+                config.theme = match tbl.preset {
+                    Some(name) => Some(super::theme::ThemeRef::Preset(name)),
+                    None => None,
+                };
+            } else {
+                config.theme = Some(super::theme::ThemeRef::Table(tbl));
+            }
+        }
         _ => return Err(format!("unknown field: {key}")),
     }
     Ok(())
+}
+
+/// 两个覆盖字段都为空 → 移除整个 runtime_overrides（保持 config.toml 干净）。
+fn cleanup_runtime_overrides(config: &mut AppConfig) {
+    if let Some(ro) = &config.runtime_overrides {
+        let anim_empty = ro.animation.as_ref().map_or(true, |a| a.enabled.is_none());
+        if ro.compact_lines.is_none() && anim_empty {
+            config.runtime_overrides = None;
+        }
+    }
 }
 
 /// 保存前全量校验；错误信息含字段路径。
@@ -289,10 +395,12 @@ pub fn validate_config(config: &AppConfig) -> Result<(), String> {
     for f in fields() {
         if matches!(f.kind, FieldKind::Number) {
             let raw = get_value(config, f.key).unwrap();
-            let v: f64 = raw
-                .parse()
-                .map_err(|_| format!("{}: invalid number", f.key))?;
-            check_range(&f, v)?;
+            if !raw.is_empty() {
+                let v: f64 = raw
+                    .parse()
+                    .map_err(|_| format!("{}: invalid number", f.key))?;
+                check_range(&f, v)?;
+            }
         }
         if f.kind == FieldKind::NumberList {
             let vals: Vec<f64> = get_value(config, f.key)
@@ -324,8 +432,8 @@ mod tests {
     }
 
     #[test]
-    fn fields_has_17_entries() {
-        assert_eq!(fields().len(), 17);
+    fn fields_has_20_entries() {
+        assert_eq!(fields().len(), 20);
     }
 
     #[test]
@@ -382,6 +490,8 @@ mod tests {
         let opts = options_for(&am, &reg);
         assert!(opts.contains(&"glacier-workstation".to_string()));
         assert!(opts.contains(&"noir-tabbed".to_string()));
+        assert!(opts.contains(&"dracula".to_string()), "主题预设名可选");
+        assert!(opts.contains(&"nord".to_string()));
     }
 
     #[test]
@@ -391,5 +501,133 @@ mod tests {
         assert_eq!(get_value(&c, "theme").unwrap(), "(custom)");
         let err = set_value(&mut c, "theme", "(custom)").unwrap_err();
         assert!(err.contains("manually"), "err = {err}");
+    }
+
+    #[test]
+    fn compact_lines_empty_is_unset_and_cleans_up() {
+        let mut c = cfg();
+        set_value(&mut c, "runtime_overrides.compact_lines", "2").unwrap();
+        assert_eq!(
+            c.runtime_overrides.as_ref().unwrap().compact_lines,
+            Some(2)
+        );
+        assert_eq!(
+            get_value(&c, "runtime_overrides.compact_lines").unwrap(),
+            "2"
+        );
+        set_value(&mut c, "runtime_overrides.compact_lines", "").unwrap();
+        assert!(
+            c.runtime_overrides.is_none(),
+            "空值应清理整个 runtime_overrides"
+        );
+        set_value(&mut c, "runtime_overrides.compact_lines", "0").unwrap();
+        assert!(c.runtime_overrides.is_none(), "0 = 未设置");
+        let err =
+            set_value(&mut c, "runtime_overrides.compact_lines", "5").unwrap_err();
+        assert!(err.contains("above maximum"), "err = {err}");
+    }
+
+    #[test]
+    fn animation_defaults_enabled_and_can_disable() {
+        let c = cfg();
+        assert_eq!(
+            get_value(&c, "runtime_overrides.animation.enabled").unwrap(),
+            "true",
+            "未设置 = 默认开启"
+        );
+        let mut c = c;
+        set_value(&mut c, "runtime_overrides.animation.enabled", "false").unwrap();
+        assert_eq!(
+            get_value(&c, "runtime_overrides.animation.enabled").unwrap(),
+            "false"
+        );
+        set_value(&mut c, "runtime_overrides.animation.enabled", "true").unwrap();
+        assert!(c.runtime_overrides.is_none(), "true = 默认 → 清理");
+        let err =
+            set_value(&mut c, "runtime_overrides.animation.enabled", "yes")
+                .unwrap_err();
+        assert!(err.contains("true or false"), "err = {err}");
+    }
+
+    #[test]
+    fn icon_set_round_trip_preserves_preset() {
+        let mut c = cfg();
+        set_value(&mut c, "theme", "nord").unwrap();
+        assert_eq!(get_value(&c, "theme.icon_set").unwrap(), "auto");
+        set_value(&mut c, "theme.icon_set", "nerd").unwrap();
+        assert_eq!(get_value(&c, "theme.icon_set").unwrap(), "nerd");
+        let tbl = match c.theme.as_ref().unwrap() {
+            crate::core::theme::ThemeRef::Table(t) => t,
+            _ => panic!("icon_set 写入后应为 Table 形态"),
+        };
+        assert_eq!(tbl.preset.as_deref(), Some("nord"));
+        assert_eq!(tbl.colors.get("icon_set").unwrap().as_str(), Some("nerd"));
+        set_value(&mut c, "theme.icon_set", "auto").unwrap();
+        match c.theme.unwrap() {
+            crate::core::theme::ThemeRef::Preset(name) => assert_eq!(name, "nord"),
+            _ => panic!("auto = 默认 → 应还原 Preset 形态"),
+        }
+        // 无 theme 时写入 → 生成仅含 icon_set 的纯 Table
+        let mut c2 = cfg();
+        c2.theme = None;
+        set_value(&mut c2, "theme.icon_set", "minimal").unwrap();
+        let tbl2 = match c2.theme.unwrap() {
+            crate::core::theme::ThemeRef::Table(t) => t,
+            _ => panic!("应转为 Table 形态"),
+        };
+        assert!(tbl2.preset.is_none());
+        assert_eq!(tbl2.colors.get("icon_set").unwrap().as_str(), Some("minimal"));
+    }
+
+    #[test]
+    fn options_icon_set_four() {
+        let reg = WidgetRegistry::new();
+        let f = fields().into_iter().find(|f| f.key == "theme.icon_set").unwrap();
+        assert_eq!(
+            options_for(&f, &reg),
+            vec!["auto", "nerd", "ascii", "minimal"]
+        );
+    }
+
+    #[test]
+    fn validate_ok_with_empty_compact_lines() {
+        // 回归：Number 字段 get_value 返回空串时 validate 不得报「invalid number」
+        let mut c = cfg();
+        c.runtime_overrides =
+            Some(crate::core::config::RuntimeOverrides::default());
+        assert!(validate_config(&c).is_ok());
+    }
+
+    #[test]
+    fn cleanup_keeps_animation_false_when_compact_lines_cleared() {
+        let mut c = cfg();
+        set_value(&mut c, "runtime_overrides.animation.enabled", "false").unwrap();
+        set_value(&mut c, "runtime_overrides.compact_lines", "").unwrap();
+        let ro = c.runtime_overrides.as_ref().expect("runtime_overrides 应保留");
+        assert!(ro.compact_lines.is_none());
+        assert_eq!(
+            ro.animation.as_ref().unwrap().enabled,
+            Some(false),
+            "animation=false 不能被误清理"
+        );
+    }
+
+    #[test]
+    fn cleanup_keeps_compact_lines_when_animation_reset_to_default() {
+        let mut c = cfg();
+        set_value(&mut c, "runtime_overrides.compact_lines", "2").unwrap();
+        set_value(&mut c, "runtime_overrides.animation.enabled", "false").unwrap();
+        set_value(&mut c, "runtime_overrides.animation.enabled", "true").unwrap();
+        let ro = c.runtime_overrides.as_ref().expect("runtime_overrides 应保留");
+        assert_eq!(ro.compact_lines, Some(2), "compact_lines 不能被误清理");
+    }
+
+    #[test]
+    fn range_error_leaves_config_unmutated() {
+        let mut c = cfg();
+        set_value(&mut c, "runtime_overrides.compact_lines", "2").unwrap();
+        assert!(set_value(&mut c, "runtime_overrides.compact_lines", "9").is_err());
+        let ro = c.runtime_overrides.as_ref().unwrap();
+        assert_eq!(ro.compact_lines, Some(2), "校验失败后原值应保留");
     }
 }

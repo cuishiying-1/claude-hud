@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added — v0.9 Web 配置页重构
+
+- `/config` 表单页重设计：顶部保存条（sticky，含「有未保存修改」徽标）+ 四组卡片网格（General/Display/Alerts/Budget，组内行布局 + 计数）+ 保存成功/失败提示；失败字段所在卡片红框高亮
+- 模型价格卡片折叠展示（默认摘要一行：模型数 + 首个模型价格样例，点击展开完整价格表）
+- 补齐 schema 未覆盖的 3 个配置项（TUI config 与 Web 均可编辑）：`runtime_overrides.compact_lines`（紧凑行数，留空/0 = 跟随布局）、`runtime_overrides.animation.enabled`（动画开关，默认开启）、`theme.icon_set`（图标集 auto/nerd/ascii/minimal，auto = 自动检测）
+- 修复：`[theme]` 表形态（custom）下 Web 保存误报「手工编辑」错误（前端跳过提交该字段）；Number 字段空值不再触发保存前校验失败
+- 黑盒用例 221 → 226（P14 五例：新字段 GET / POST 落盘 / 读回 / 空值清理 / 卡片表单页）
+
 ### Added — v0.9 配置编辑器
 
 - `claude-hud config`：全屏键盘表单编辑常用配置（General/Display/Alerts/Budget 四组 17 字段；Tab 切组、Enter 编辑、s 保存、q 退出；未保存修改两段式确认）
@@ -14,6 +22,24 @@
 
 - `claude-hud config` 保存会重建 config.toml（丢失手写注释，备份保留）
 - install.ps1 `HUD_LOCAL_STUB` 模式自动清理旧 claude-hud.exe（防止 PATH .EXE 优先命中旧版）
+
+### Fixed
+
+- 主题预设可作为轻量 mod：`mod preview dracula` / `mod use nord` / `mod pick` 不再报 `mod 'xxx' not found`（`load_mod` 对 10 个主题预设名合成无 layout 的轻量 mod；`active_mod` 设为主题预设时布局回退 `config.compact_layout`，不再上屏 `[hud err]`）
+- 黑盒用例 198 → 212（P11 六例：preview 主题预设 / use 后 current 回读 / use 后 render 布局回退 / preview 交互回退 编号切换 / 越界报错 / EOF 退出不切换）
+
+### Added — v0.9 totals UI 重设计
+
+- `totals` 输出改三段分区卡片式：`━━ 标题 ━━━` 分隔线（主题 accent 色）、总计/每日/窗口对齐列、金额 success 色高亮
+- 已结束窗口折叠为一行（`另有 N 个已结束会话 · 合计 ¥X.XX · 最新于 HH:MM`），`totals --all` 展开全部；活跃/空闲完整列出
+- 非 TTY（重定向/管道）自动降级纯文本（保留对齐，无 ANSI 码）；空库/空窗口统一 `—` 空态
+- 黑盒用例 212 → 216（P12 四例：折叠行 / --all 展开 / 无 ANSI / 空态）
+
+### Added — v0.9 交互式 mod 预览
+
+- `claude-hud mod preview`（无参数）：TTY 下全屏浏览器 —— 左候选列表 ↑/↓（或 j/k）浏览，右侧实时预览元数据 + 主题样例行（真彩 ANSI 按选中 mod 渲染）；Enter 切换并全局生效，q/Esc 退出不切换
+- 非 TTY（黑盒 / `!` 管道）回退编号列表选择，与 `mod pick` 同交互；EOF 直接退出不切换
+- `mod preview <name>` 静态预览增加主题样例行（此前只有元数据）
 
 ### 多会话监控（v0.8 批次，2026-08-06）
 - `totals` 命令：全会话总计（会话数/成本/token/总时长/平均）+ 最近 7 天按天分组 + 活跃窗口实时段（不计入总计）

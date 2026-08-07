@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
@@ -21,15 +22,33 @@ use crate::core::animation;
 use crate::core::config::AppConfig;
 use crate::core::history::HistoryStore;
 use crate::core::pricing;
+use crate::core::scanner::{default_projects_root, WindowsScanner};
 use crate::core::session::SessionData;
 use crate::core::state::{self, StateFile};
 use crate::core::theme::Theme;
 use crate::core::transcript::{TranscriptReader, TranscriptSummary};
 use crate::core::widget::WidgetRegistry;
+use crate::core::windows::WindowInfo;
 use crate::widgets::window_list;
 
 /// 刷新间隔下限：防存量配置 refresh_interval_ms = 0 造成忙轮询（100% CPU）。
 const MIN_REFRESH_MS: u64 = 50;
+
+/// TUI 进程内 scanner：窗口列表布局数据源（与 serve 每 5s 扫描口径一致）。
+static DASH_SCANNER: Mutex<Option<WindowsScanner>> = Mutex::new(None);
+const DASH_SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn scan_once(config: &AppConfig) -> Vec<WindowInfo> {
+    let mut guard = DASH_SCANNER.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(WindowsScanner::new(
+            default_projects_root(),
+            pricing::merged_pricing(config),
+            crate::core::scanner::model_windows_from_config(config),
+        ));
+    }
+    guard.as_mut().expect("initialized above").scan()
+}
 
 /// Launch the full-screen ratatui dashboard.
 pub fn run(
@@ -97,7 +116,16 @@ fn run_loop(
 
     let mut summary: Option<TranscriptSummary> = None;
 
+    // 窗口列表数据：每 5s 扫描一次（首帧强制），帧渲染用最近结果
+    let mut last_scan = std::time::Instant::now() - DASH_SCAN_INTERVAL;
+    let mut wins: Vec<WindowInfo> = Vec::new();
+
     loop {
+        if last_scan.elapsed() >= DASH_SCAN_INTERVAL {
+            wins = scan_once(config);
+            last_scan = std::time::Instant::now();
+        }
+
         // TTY → state.json 快照；非 TTY → 旧 stdin 路径。None 时保留上次数据
         // （占位显示，避免空白闪烁）。
         if let Some(d) = state::read_current_data() {
@@ -178,13 +206,16 @@ fn run_loop(
             .draw(|frame| {
                 draw_dashboard(
                     frame, registry, &data, theme, config, summary.as_ref(),
-                    &layout_name, tab_idx, show_help,
+                    &wins, &layout_name, tab_idx, show_help,
                 );
             })
             .map_err(|e| format!("draw: {}", e))?;
 
         if event::poll(tick_rate).map_err(|e| format!("poll: {}", e))? {
             if let Event::Key(key) = event::read().map_err(|e| format!("read event: {}", e))? {
+                if !is_press(&key) {
+                    continue; // Windows Release 事件：忽略，防按键双触发
+                }
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => {
                         // Record session before exit
@@ -202,7 +233,7 @@ fn run_loop(
                     }
                     KeyCode::Left | KeyCode::Right => {
                         if layout_name == "tabbed" {
-                            let len = config.compact_layout.len();
+                            let len = valid_layout(config, registry).len();
                             tab_idx = next_tab(
                                 tab_idx,
                                 len,
@@ -249,6 +280,18 @@ pub fn normalize_layout(name: &str) -> String {
     }
 }
 
+/// 过滤未知 widget id（与紧凑模式口径一致：compact.rs 渲染对未知 id 跳过）。
+/// 面板映射、tab 条与 tab 内容统一用它，防止存量配置含失效 id
+/// （如 `compact_layout = ["false"]`）时整块面板空白。
+pub fn valid_layout(config: &AppConfig, registry: &WidgetRegistry) -> Vec<String> {
+    config
+        .compact_layout
+        .iter()
+        .filter(|id| registry.get(id).is_some())
+        .cloned()
+        .collect()
+}
+
 /// 刷新间隔钳制：refresh_interval_ms 下限 50ms，避免 0 值忙轮询。
 pub fn effective_refresh_ms(ms: u64) -> u64 {
     ms.max(MIN_REFRESH_MS)
@@ -263,6 +306,13 @@ pub fn next_tab(cur: usize, len: usize, dir: i8) -> usize {
     (cur + d) % len
 }
 
+/// Windows 每次按键产生 Press + Release 两个事件：只处理 Press，
+/// 否则按一下 l 会连跳两个布局（Release 也被 match 命中）。Repeat
+/// 也过滤（未来启用增强键盘模式时避免长按连跳）。
+pub fn is_press(key: &crossterm::event::KeyEvent) -> bool {
+    key.kind == crossterm::event::KeyEventKind::Press
+}
+
 fn draw_dashboard(
     frame: &mut Frame,
     registry: &WidgetRegistry,
@@ -270,6 +320,7 @@ fn draw_dashboard(
     theme: &Theme,
     config: &AppConfig,
     summary: Option<&TranscriptSummary>,
+    wins: &[WindowInfo],
     layout_name: &str,
     tab_idx: usize,
     show_help: bool,
@@ -306,7 +357,7 @@ fn draw_dashboard(
             frame, registry, data, theme, config, summary, main_area, tab_idx,
         );
     } else if layout_name == "windows" {
-        window_list::draw(frame, main_area, theme, config);
+        window_list::draw(frame, main_area, theme, config, wins);
     } else {
         let layout = match layout_name {
             "sidebar" => build_sidebar(main_area),
@@ -314,16 +365,13 @@ fn draw_dashboard(
             _ => build_grid_2x2(main_area),
         };
         // Map widgets to panels (use compact_layout order as panel assignment)
-        let widget_ids: Vec<&str> = config.compact_layout.iter()
-            .map(|s| s.as_str())
-            .collect();
+        let valid = valid_layout(config, registry);
+        let widget_ids: Vec<&str> = valid.iter().map(|s| s.as_str()).collect();
         for (i, panel_area) in layout.iter().enumerate() {
             let widget_id = widget_ids.get(i).copied().unwrap_or("context_bar");
-            let render_area = if layout_name == "focus" {
-                render_pseudo3d(*panel_area, frame, theme)
-            } else {
-                *panel_area
-            };
+            // grid/sidebar/focus 统一伪 3D 面板（accent 边框 + 阴影），
+            // 与 tabbed 内容面板一致；window_list 独立不在此路径。
+            let render_area = render_pseudo3d(*panel_area, frame, theme);
             if let Some(widget) = registry.get(widget_id) {
                 let mut widget_config = config.widget_config(widget_id);
                 pricing::inject_cost(data, summary, config, &mut widget_config);
@@ -417,9 +465,10 @@ fn draw_tabbed(
     tab_idx: usize,
 ) {
     let lang = config.language();
+    let layout = valid_layout(config, registry);
     let tab_bar = ratatui::layout::Rect::new(area.x, area.y, area.width, 1);
     let mut spans: Vec<Span> = Vec::new();
-    for (i, id) in config.compact_layout.iter().enumerate() {
+    for (i, id) in layout.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("  "));
         }
@@ -444,9 +493,10 @@ fn draw_tabbed(
 
     let content = ratatui::layout::Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
     let inner = render_pseudo3d(content, frame, theme);
-    let widget_id = config
-        .compact_layout
-        .get(tab_idx)
+    // 过滤后列表可能短于外部 tab_idx（坏值/空列表）：钳制后仍越界 → context_bar
+    let tab = layout.len().saturating_sub(1).min(tab_idx);
+    let widget_id = layout
+        .get(tab)
         .cloned()
         .unwrap_or_else(|| "context_bar".to_string());
     if let Some(widget) = registry.get(&widget_id) {
@@ -527,11 +577,13 @@ fn render_single_frame(
     let mut data = state::read_current_data().unwrap_or_default();
     // v0.7 窗口单点解析（单帧路径同样覆盖 200k 兜底）
     pricing::resolve_context_window(&mut data, config);
+    let wins = scan_once(config);
     let layout_name = normalize_layout(&config.dashboard.default_layout);
     terminal
         .draw(|frame| {
             draw_dashboard(
-                frame, registry, &data, theme, config, None, &layout_name, 0, false,
+                frame, registry, &data, theme, config, None, &wins, &layout_name, 0,
+                false,
             );
         })
         .map_err(|e| format!("single-frame draw: {}", e))?;
@@ -643,5 +695,27 @@ mod tests {
         assert_eq!(next_tab(0, 4, -1), 3);
         assert_eq!(next_tab(2, 4, -1), 1);
         assert_eq!(next_tab(0, 0, 1), 0);
+    }
+
+    #[test]
+    fn valid_layout_filters_unknown_ids() {
+        let mut reg = WidgetRegistry::new();
+        crate::widgets::register_all(&mut reg, &AppConfig::default());
+        let mut cfg = AppConfig::default();
+        cfg.compact_layout = vec!["false".into(), "context_bar".into(), "nope".into()];
+        assert_eq!(valid_layout(&cfg, &reg), vec!["context_bar".to_string()]);
+        cfg.compact_layout.clear();
+        assert!(valid_layout(&cfg, &reg).is_empty());
+    }
+
+    #[test]
+    fn is_press_filters_release_and_repeat() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        let press = KeyEvent::new_with_kind(KeyCode::Char('l'), KeyModifiers::NONE, KeyEventKind::Press);
+        let release = KeyEvent::new_with_kind(KeyCode::Char('l'), KeyModifiers::NONE, KeyEventKind::Release);
+        let repeat = KeyEvent::new_with_kind(KeyCode::Char('l'), KeyModifiers::NONE, KeyEventKind::Repeat);
+        assert!(is_press(&press));
+        assert!(!is_press(&release));
+        assert!(!is_press(&repeat));
     }
 }

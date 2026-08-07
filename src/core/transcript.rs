@@ -24,6 +24,8 @@ pub struct TranscriptSummary {
     pub timestamps_reliable: bool,
     /// 最新事件时间戳（可靠=真实 epoch；不可靠=行号估算）。
     pub last_event_secs: Option<u64>,
+    /// 会话模型：首条 assistant 消息的 model（scanner 计价用）。
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -163,6 +165,24 @@ pub struct AssistantEntry {
 pub struct MessageContent {
     #[serde(default)]
     pub usage: Option<UsageInfo>,
+    /// 容错 model：String → 值；对象 {id} → id；缺失/null/其他 → None。
+    #[serde(default, deserialize_with = "deserialize_model")]
+    pub model: Option<String>,
+}
+
+fn deserialize_model<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(Some(s)),
+        serde_json::Value::Object(map) => Ok(map
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(String::from)),
+        _ => Ok(None),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -197,6 +217,8 @@ pub struct TranscriptReader {
     active_recent: Option<String>,
     timestamps_reliable: bool,
     last_event_secs: Option<u64>,
+    /// 会话模型：首条 assistant 消息的 model（不持久化，恢复后由新行重新捕获）。
+    model: Option<String>,
     agents: HashMap<String, AgentRecord>,
     skills: HashMap<String, SkillCall>,
     mcps: HashMap<String, McpCall>,
@@ -224,6 +246,7 @@ impl TranscriptReader {
             active_recent: None,
             timestamps_reliable: false,
             last_event_secs: None,
+            model: None,
             agents: HashMap::new(),
             skills: HashMap::new(),
             mcps: HashMap::new(),
@@ -288,6 +311,7 @@ impl TranscriptReader {
             total_tokens: self.total_tokens.clone(),
             timestamps_reliable: self.timestamps_reliable,
             last_event_secs: self.last_event_secs,
+            model: self.model.clone(),
         }
     }
 
@@ -316,6 +340,7 @@ impl TranscriptReader {
             self.active_recent = None;
             self.timestamps_reliable = false;
             self.last_event_secs = None;
+            self.model = None;
         }
         if file_len <= self.last_pos {
             return self.cumulative_summary(); // No new data
@@ -428,6 +453,9 @@ impl TranscriptReader {
                     }
                     TranscriptEntry::AssistantEntry(assistant) => {
                         if let Some(msg) = assistant.message {
+                            if self.model.is_none() {
+                                self.model = msg.model.clone();
+                            }
                             if let Some(usage) = msg.usage {
                                 self.total_tokens.input += usage.input_tokens;
                                 self.total_tokens.output += usage.output_tokens;
@@ -576,6 +604,42 @@ mod tests {
 
     fn no_ts_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/transcript/no_ts.jsonl")
+    }
+
+    #[test]
+    fn message_content_model_tolerant_deserializer() {
+        // String → Some
+        let s: MessageContent = serde_json::from_str(
+            r#"{"usage":{"input_tokens":1},"model":"deepseek-v4-flash"}"#,
+        )
+        .unwrap();
+        assert_eq!(s.model.as_deref(), Some("deepseek-v4-flash"));
+        // 对象 {id} → Some(id)
+        let o: MessageContent = serde_json::from_str(r#"{"model":{"id":"abc"}}"#).unwrap();
+        assert_eq!(o.model.as_deref(), Some("abc"));
+        // 缺失 → None
+        let n: MessageContent = serde_json::from_str(r#"{"usage":{"input_tokens":1}}"#).unwrap();
+        assert!(n.model.is_none());
+        // 显式 null → None（不崩）
+        let z: MessageContent = serde_json::from_str(r#"{"model":null}"#).unwrap();
+        assert!(z.model.is_none());
+    }
+
+    #[test]
+    fn first_assistant_model_captured() {
+        let mut reader = TranscriptReader::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/transcript/model.jsonl"),
+        );
+        let summary = reader.read_updates();
+        // 首条 assistant 消息模型生效（后续缺失/对象形态不覆盖）
+        assert_eq!(summary.model.as_deref(), Some("deepseek-v4-flash"));
+    }
+
+    #[test]
+    fn model_none_when_transcript_has_no_model() {
+        let mut reader = TranscriptReader::new(no_ts_fixture());
+        let summary = reader.read_updates();
+        assert!(summary.model.is_none());
     }
 
     #[test]

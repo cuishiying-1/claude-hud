@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::core::data_source::DataSource;
+
 /// Full session data ingested from Claude Code status line stdin JSON.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SessionData {
@@ -12,6 +14,9 @@ pub struct SessionData {
     pub transcript_path: Option<String>,
     #[serde(default, alias = "subagentStatusLine")]
     pub subagent_status_line: Option<SubagentStatusLine>,
+    /// 数据来源标注（serde skip：不进入 stdin 解析/序列化，默认 Reported）。
+    #[serde(skip)]
+    pub data_source: DataSource,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -187,5 +192,16 @@ mod tests {
         let data = SessionData::from_stdin_json(&input).unwrap();
         assert_eq!(data.rate_limits.five_hour.used_percentage, 0.0);
         assert!(data.subagent_status_line.is_none());
+    }
+
+    #[test]
+    fn data_source_defaults_reported_and_skipped_in_json() {
+        let input = json("null", r#""subagent_status_line":null"#);
+        let data = SessionData::from_stdin_json(&input).unwrap();
+        assert_eq!(data.data_source, crate::core::data_source::DataSource::Reported);
+        // transcript_path 缺失时 apply_data_source 无副作用
+        let mut data2 = SessionData::default();
+        crate::compact::apply_data_source(&mut data2);
+        assert_eq!(data2.transcript_path, None);
     }
 }

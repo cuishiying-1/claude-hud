@@ -66,7 +66,7 @@ impl Widget for CostDisplay {
         let t_in = data.context_window.total_input_tokens;
         let t_out = data.context_window.total_output_tokens;
         // ⑲ 诚实降级：无任何成本/用量数据 → —（网关无 usage/cost，不显示 $0.00 假精确）
-        if cost == 0.0 && t_in == 0 && t_out == 0 && !estimated {
+        if no_cost_data(cost, t_in, t_out) && !estimated {
             return "—".to_string();
         }
         let warn = config.get_f64("warn_threshold_usd", 10.0);
@@ -105,6 +105,15 @@ impl Widget for CostDisplay {
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, config: &WidgetConfig) {
+        // ⑲ dashboard 同款诚实降级：无成本/用量 → —（不显示 ¥0.0000 假精确）
+        if no_cost_data(
+            data.cost.total_cost_usd,
+            data.context_window.total_input_tokens,
+            data.context_window.total_output_tokens,
+        ) {
+            frame.render_widget(Text::from("—"), area);
+            return;
+        }
         let now = std::time::Instant::now();
         let delta = now
             .duration_since(*self.last_frame.lock().expect("frame clock"))
@@ -132,6 +141,11 @@ impl Widget for CostDisplay {
     }
 }
 
+/// ⑲ 诚实降级判定：无任何成本且无任何用量数据（网关不提供 usage/cost）。
+fn no_cost_data(cost: f64, t_in: u64, t_out: u64) -> bool {
+    cost == 0.0 && t_in == 0 && t_out == 0
+}
+
 /// ⑲ k 缩写（spec 样例口径）：≥100k 去小数防溢出；≥1k 一位小数；否则原数。
 pub fn format_tokens(n: u64) -> String {
     if n >= 100_000 {
@@ -145,7 +159,7 @@ pub fn format_tokens(n: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_tokens, CostDisplay, EasedValue};
+    use super::{format_tokens, no_cost_data, CostDisplay, EasedValue};
     use crate::core::session::SessionData;
     use crate::core::theme::Theme;
     use crate::core::widget::{Widget, WidgetConfig};
@@ -256,6 +270,14 @@ mod tests {
         let out = CostDisplay::new().render_compact(&data, &theme, &config);
         assert!(!out.contains("tok"), "no token segment: {}", out);
         assert!(out.contains("≈$10.8/h"), "rate kept: {}", out);
+    }
+
+    #[test]
+    fn no_cost_data_true_only_when_cost_and_tokens_all_zero() {
+        assert!(no_cost_data(0.0, 0, 0));
+        assert!(!no_cost_data(0.5, 0, 0), "cost present");
+        assert!(!no_cost_data(0.0, 100, 0), "input tokens present");
+        assert!(!no_cost_data(0.0, 0, 7), "output tokens present");
     }
 
     #[test]

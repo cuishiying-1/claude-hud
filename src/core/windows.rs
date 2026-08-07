@@ -66,10 +66,14 @@ pub struct WindowInfo {
     pub used_pct: f64,
     pub tokens_in: u64,
     pub tokens_out: u64,
+    pub cache_read: u64,
+    pub cache_created: u64,
     pub cost: f64,
     pub agent_count: usize,
     pub ts: u64,
     pub corrupt: bool,
+    /// 数据源标注（"reported"/"fallback"；空串视为 reported，兼容旧快照）。
+    pub data_source: String,
 }
 
 /// 扫描 windows/ 目录(默认位置),目录缺失 → 空列表。
@@ -122,18 +126,26 @@ pub fn scan_dir(dir: &std::path::Path, now_secs: u64) -> Vec<WindowInfo> {
             used_pct: snap.context_window.used_percentage,
             tokens_in: snap.context_window.total_input_tokens,
             tokens_out: snap.context_window.total_output_tokens,
+            cache_read: snap.context_window.current_usage.cache_read_input_tokens,
+            cache_created: snap.context_window.current_usage.cache_creation_input_tokens,
             cost: snap.cost.total_cost_usd,
             agent_count: snap.agent_count,
             ts: snap.timestamp_secs,
             corrupt: false,
+            data_source: snap.data_source.clone(),
         });
     }
-    out.sort_by(|a, b| {
+    sort_windows(&mut out);
+    out
+}
+
+/// 排序：活跃优先、同级按 ts 新→旧（scan_dir 与 WindowsScanner 共用）。
+pub fn sort_windows(wins: &mut [WindowInfo]) {
+    wins.sort_by(|a, b| {
         status_rank(&b.status)
             .cmp(&status_rank(&a.status))
             .then(b.ts.cmp(&a.ts))
     });
-    out
 }
 
 fn status_rank(s: &WindowStatus) -> u8 {

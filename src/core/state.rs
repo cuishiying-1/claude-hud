@@ -63,6 +63,9 @@ pub struct SnapshotSegment {
     /// 结账用：快照时刻的活跃代理数（to_session 不还原该字段）。
     #[serde(default)]
     pub agent_count: usize,
+    /// 数据源标注（"reported"/"fallback"）；旧快照无该字段 → 空串（视为 reported）。
+    #[serde(default)]
+    pub data_source: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -213,6 +216,7 @@ impl SnapshotSegment {
                 .as_ref()
                 .map(|s| s.agents.len())
                 .unwrap_or(0),
+            data_source: data.data_source.name().to_string(),
         }
     }
 
@@ -249,6 +253,13 @@ impl SnapshotSegment {
             },
             transcript_path: self.transcript_path.clone(),
             subagent_status_line: None,
+            data_source: if self.data_source == "fallback" {
+                crate::core::data_source::DataSource::Fallback(std::path::PathBuf::from(
+                    self.transcript_path.clone().unwrap_or_default(),
+                ))
+            } else {
+                crate::core::data_source::DataSource::Reported
+            },
         }
     }
 
@@ -289,10 +300,15 @@ pub fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
 
 /// Current session data: piped stdin (legacy, unchanged) or, when stdin is a
 /// TTY, the freshest state.json snapshot (never blocks on the terminal).
+///
+/// Non-TTY 时 stdin 无输入/解析失败则回退新鲜快照（如 `! claude-hud
+/// dashboard` 管道环境），避免全空面板；黑盒注入的 stdin JSON 仍然优先。
 pub fn read_current_data() -> Option<SessionData> {
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
-        return read_stdin_json();
+        if let Some(d) = read_stdin_json() {
+            return Some(d);
+        }
     }
     let path = AppConfig::state_path().ok()?;
     let st = StateFile::read(&path);
@@ -408,6 +424,27 @@ mod tests {
         let back = StateFile::read(&path);
         assert_eq!(back.previous_mod.as_deref(), Some("noir-tabbed"));
         cleanup(&path);
+    }
+
+    #[test]
+    fn snapshot_round_trips_data_source() {
+        use crate::core::data_source::DataSource;
+        let mut data = super::super::session::SessionData::default();
+        data.transcript_path = Some("/x/s.jsonl".to_string());
+        data.data_source = DataSource::Fallback(PathBuf::from("/x/s.jsonl"));
+        let snap = SnapshotSegment::from_session(&data, 1);
+        assert_eq!(snap.data_source, "fallback");
+        let back = snap.to_session();
+        assert_eq!(back.data_source, DataSource::Fallback(PathBuf::from("/x/s.jsonl")));
+        // 旧快照无该字段 → 序列化 default → to_session 重建为 Reported
+        let old: SnapshotSegment =
+            serde_json::from_str(r#"{"timestamp_secs":1,"transcript_path":"/x/s.jsonl"}"#).unwrap();
+        assert_eq!(old.data_source, "");
+        assert_eq!(old.to_session().data_source, DataSource::Reported);
+        // Reported 往返
+        let r = SessionData::default();
+        let snap2 = SnapshotSegment::from_session(&r, 1);
+        assert_eq!(snap2.data_source, "reported");
     }
 
     #[test]

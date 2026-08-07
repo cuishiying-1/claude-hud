@@ -549,7 +549,8 @@ def serve_case(cid, name, path, expect_status, expect_ct=None,
                expect_body_contains=None, expect_body_not_contains=None,
                remove_db=False, prepare_db_sql=None, note=None,
                method="GET", body=None, expect_backup=False,
-               config_path=None, config_content=None):
+               config_path=None, config_content=None,
+               remove_projects=False, projects_files=None):
     return {"id": cid, "name": name, "dim": "D6", "args": ["serve"],
             "run_kind": "serve", "path": path,
             "expect_status": expect_status, "expect_ct": expect_ct,
@@ -558,6 +559,8 @@ def serve_case(cid, name, path, expect_status, expect_ct=None,
             "expect_body_contains": expect_body_contains or [],
             "expect_body_not_contains": expect_body_not_contains or [],
             "remove_db": remove_db,
+            "remove_projects": remove_projects,
+            "projects_files": projects_files or [],
             "prepare_db_sql": prepare_db_sql,
             "post_free": post_free,
             "method": method, "body": body,
@@ -664,11 +667,13 @@ D6 = [
 
 
 def dash_case(cid, name, spec, config=None, remove_db=False,
-              prepare_db_sql=None, note=None):
-    return {"id": cid, "name": name, "dim": "D7", "args": ["dashboard"],
+              prepare_db_sql=None, note=None, **extra):
+    case = {"id": cid, "name": name, "dim": "D7", "args": ["dashboard"],
             "run_kind": "dashboard", "spec": spec, "config": config,
             "remove_db": remove_db, "prepare_db_sql": prepare_db_sql,
             "note": note}
+    case.update(extra)
+    return case
 
 
 D7_TREND_CFG = (
@@ -695,6 +700,17 @@ D7 = [
               config=D7_TREND_CFG.replace("grid-2x2", "sidebar"),
               prepare_db_sql=trend_db(),
               note="⑪：sidebar 布局容纳趋势面板（三种非 tabbed 布局抽查）"),
+    dash_case("D7-05", "空 stdin 回退快照（管道环境）",
+              {"exit": 0, "stdout_contains": ["Model: deepseek-v4-flash"]},
+              pre_cmds=[{"args": ["render"], "stdin": j(full_dict())}],
+              note="⑪：Claude Code ! 管道环境（stdout 非 TTY、stdin 空）→ 单帧路径回退 state.json 新鲜快照（pre_cmds render 覆盖快照，勿加 remove_state）；修复前全空面板"),
+    dash_case("D7-06", "坏 compact_layout 值面板兜底 context_bar",
+              {"exit": 0, "stdout_contains": ["tokens"]},
+              config=("compact_layout = [\"false\"]\n"
+                      "[dashboard]\n"
+                      "refresh_interval_ms = 0\n"
+                      "default_layout = \"focus\"\n"),
+              note="存量配置 compact_layout=[\"false\"]（无此 widget）→ focus 单面板回退 context_bar；修复前未知 id 面板整块空白"),
 ]
 
 
@@ -1444,9 +1460,9 @@ P8 = [
 # --- P9 多会话监控（totals 全会话总计 + 活跃窗口）---
 P9 = [
     render_case("P9-01", "totals 空库全 0", "P9",
-                {"exit": 0, "stdout_contains": ["All-session totals", "0 sessions"]},
+                {"exit": 0, "stdout_contains": ["All-session totals", "—"]},
                 args=["totals"], config=DEFAULT_CONFIG, remove_db=True,
-                note="totals 空库：COUNT=0 / SUM=0，标题行格式"),
+                note="totals 空库：总计段显示 —（新空态语义，不再打 0 值行）"),
     render_case("P9-02", "totals 历史总和 + 按天分组", "P9",
                 {"exit": 0, "stdout_contains": ["All-session totals", "1 sessions",
                                                 "Daily totals"]},
@@ -1467,6 +1483,122 @@ P9 = [
                      "stdin": j(full_dict(**{"transcript_path": "C:\\work\\proj\\s.jsonl"}))},
                 ],
                 note="render 写 windows/<key>.json(双写)→ totals 活跃段显示 proj [active]"),
+]
+
+# ㉕ P12 totals UI 重设计（v0.9）：分段卡片式 + 已结束折叠 + --all 展开 +
+# 非 TTY 降级 + 空态。windows_files 由 harness 预置（ts = now - age，
+# age ≤10s = 活跃 / >300s = 已结束），remove_windows 保证干净起点。
+P12 = [
+    {
+        "id": "P12-01", "name": "totals 已结束窗口折叠行",
+        "dim": "P12", "args": ["totals"], "stdin": None,
+        "spec": {"exit": 0,
+                 "stdout_contains": ["Active windows", "proj",
+                                     "(2 ended sessions", "run totals --all"]},
+        "config": DEFAULT_CONFIG, "remove_db": True, "remove_windows": True,
+        "windows_files": [
+            {"key": "aaa", "age": 3, "transcript": "C:\\work\\proj\\s.jsonl",
+             "model": "m1", "pct": 4.0, "cost": 0.22, "tokens_in": 39000},
+            {"key": "bbb", "age": 3600, "transcript": "C:\\work\\old1\\s.jsonl",
+             "model": "m2", "cost": 0.10},
+            {"key": "ccc", "age": 7200, "transcript": "C:\\work\\old2\\s.jsonl",
+             "model": "m3", "cost": 0.02},
+        ],
+        "note": "1 活跃完整列出 + 2 已结束折叠一行（计数/成本/时间）",
+    },
+    {
+        "id": "P12-02", "name": "totals --all 展开已结束",
+        "dim": "P12", "args": ["totals", "--all"], "stdin": None,
+        "spec": {"exit": 0,
+                 "stdout_contains": ["[ended]", "old1", "old2"],
+                 "stdout_not_contains": ["run totals --all"]},
+        "config": DEFAULT_CONFIG, "remove_db": True, "remove_windows": True,
+        "windows_files": [
+            {"key": "aaa", "age": 3, "transcript": "C:\\work\\proj\\s.jsonl",
+             "model": "m1", "pct": 4.0, "cost": 0.22, "tokens_in": 39000},
+            {"key": "bbb", "age": 3600, "transcript": "C:\\work\\old1\\s.jsonl",
+             "model": "m2", "cost": 0.10},
+            {"key": "ccc", "age": 7200, "transcript": "C:\\work\\old2\\s.jsonl",
+             "model": "m3", "cost": 0.02},
+        ],
+        "note": "--all 展开：两条已结束窗口行 + [ended] 标签，无折叠行",
+    },
+    {
+        "id": "P12-03", "name": "totals 非 TTY 输出无 ANSI 码",
+        "dim": "P12", "args": ["totals"], "stdin": None,
+        "spec": {"exit": 0, "stdout_not_contains": ["\x1b["]},
+        "config": DEFAULT_CONFIG, "remove_db": True, "remove_windows": True,
+        "windows_files": [
+            {"key": "aaa", "age": 3, "transcript": "C:\\work\\proj\\s.jsonl",
+             "model": "m1", "pct": 4.0, "cost": 0.22, "tokens_in": 39000},
+        ],
+        "note": "黑盒 stdout 非 TTY → is_terminal 降级纯文本（含窗口行）",
+    },
+    {
+        "id": "P12-04", "name": "totals 空窗口空态",
+        "dim": "P12", "args": ["totals"], "stdin": None,
+        "spec": {"exit": 0, "stdout_contains": ["Active windows", "—"]},
+        "config": DEFAULT_CONFIG, "remove_db": True, "remove_windows": True,
+        "note": "windows 目录清空 → 窗口段 —（无残留干扰，需 remove_windows）",
+    },
+]
+
+# ㉗ P14 配置页重构（v0.9）：3 个新字段接线 + 卡片表单页。共享 temp 路径
+# hud-cfg-p14.toml（与 P10 的 hud-cfg-p10.toml 隔离，避免互相污染）。
+P14 = [
+    serve_case("P14-01", "GET /api/config 含 3 个新字段", "/api/config", 200,
+               "application/json", expect_json=True,
+               expect_json_fields=["fields", "current"],
+               expect_body_contains=[
+                   '"key":"runtime_overrides.compact_lines"',
+                   '"key":"runtime_overrides.animation.enabled"',
+                   '"key":"theme.icon_set"',
+                   '"runtime_overrides.compact_lines":""',
+                   '"theme.icon_set":"auto"',
+                   '"runtime_overrides.animation.enabled":"true"',
+               ],
+               config_path=os.path.join(tempfile.gettempdir(), "hud-cfg-p14.toml"),
+               config_content='language = "en"\ntheme = "nord"\n',
+               note="schema 17→20：新字段进 fields 与 current（未设置时 compact_lines 空 / icon_set auto / animation 默认 true）"),
+    serve_case("P14-02", "POST 新字段 → 落盘", "/api/config", 200,
+               "application/json", method="POST",
+               body='{"runtime_overrides.compact_lines":"2","theme.icon_set":"nerd"}',
+               expect_backup=True,
+               expect_body_contains=["ok"],
+               config_path=os.path.join(tempfile.gettempdir(), "hud-cfg-p14.toml"),
+               config_content='language = "en"\ntheme = "nord"\n',
+               note="三点路径 set_value：compact_lines=2 进 runtime_overrides，icon_set=nerd 进 [theme]（preset 保留）"),
+    serve_case("P14-03", "GET 读回新值（磁盘权威）", "/api/config", 200,
+               "application/json", expect_json=True,
+               expect_json_fields=["current"],
+               expect_body_contains=[
+                   '"runtime_overrides.compact_lines":"2"',
+                   '"theme.icon_set":"nerd"',
+                   '"theme":"(custom)"',
+                   '"runtime_overrides.animation.enabled":"true"',
+               ],
+               config_path=os.path.join(tempfile.gettempdir(), "hud-cfg-p14.toml"),
+               note="P14-02 落盘内容读回；theme 转 Table 形态显示 (custom)；animation 未写 = 默认 true"),
+    serve_case("P14-04", "POST 空值 → 不写入（空 = 默认）", "/api/config", 200,
+               "application/json", method="POST",
+               body='{"runtime_overrides.compact_lines":"","runtime_overrides.animation.enabled":"true"}',
+               expect_body_contains=["ok"],
+               config_path=os.path.join(tempfile.gettempdir(), "hud-cfg-p14.toml"),
+               config_content='language = "en"\ntheme = "nord"\n',
+               note="compact_lines 空 + animation true（默认）→ runtime_overrides 整体清理；theme 不被触碰"),
+    serve_case("P14-05", "GET /config 卡片表单页", "/config", 200,
+               "text/html; charset=utf-8",
+               expect_body_contains=[
+                   'class="card"',
+                   'id="cfg-form"',
+                   'name="runtime_overrides.compact_lines"',
+                   'name="runtime_overrides.animation.enabled"',
+                   'name="theme.icon_set"',
+                   "Configuration",
+                   "save",
+               ],
+               config_content='language = "en"\n',
+               note="卡片结构 + 3 个新字段控件；Configuration/cfg-form/save 兼容 P10-06 断言"),
 ]
 
 # ㉓ P10 配置编辑器（v0.9）：P10-01 Task 3；P10-02..05 Task 6；P10-06 Task 7。
@@ -1795,14 +1927,139 @@ def b6_cases():
     ]
 
 
+# ㉔ P11 主题预设作为轻量 mod（v0.9 修复）：load_builtin_mod 曾只认 6 个出厂包
+# → mod preview dracula 报 not found、active_mod=dracula 静默无效。合成包补齐
+# 后 preview/use/render 全链路可用。use 写入注入的 CLAUDE_HUD_CONFIG 与
+# CLAUDE_HUD_DIR（P11-02/03 共享 hud-cfg-p11.toml 与 hud-dir-p11，不碰真实目录）。
+P11 = [
+    {
+        "id": "P11-01", "name": "mod preview 主题预设 + 样例行",
+        "dim": "P11", "args": ["mod", "preview", "dracula"], "stdin": None,
+        "spec": {"exit": 0,
+                 "stdout_contains": ["dracula", "Sample"],
+                 "stdout_raw_regex": [r"38;2;189;147;249"]},
+        "note": "主题预设合成轻量 mod → preview 不再 not found；样例行含 dracula model 色码 #bd93f9（色码走 raw 通道：stdout_contains 剥离 ANSI）",
+    },
+    {
+        "id": "P11-02", "name": "mod use 主题预设 + current 回读",
+        "dim": "P11", "args": ["mod", "current"], "stdin": None,
+        "pre_cmds": [["mod", "use", "dracula"]],
+        "spec": {"exit": 0, "stdout_contains": ["dracula"]},
+        "config_path": os.path.join(tempfile.gettempdir(), "hud-cfg-p11.toml"),
+        "config_content": 'active_mod = ""\n',
+        "note": "use 写注入 config+测试 HUD_DIR；current 从 config 读 active_mod=dracula",
+    },
+    {
+        "id": "P11-03", "name": "use 主题预设后 render 布局回退不报错",
+        "dim": "P11", "args": ["render"],
+        # 最小合法 render 请求（SessionData 必填字段：model/context_window/cost）
+        "stdin": ('{"model": {"id": "m", "display_name": "m-model"}, '
+                  '"context_window": {"total_input_tokens": 1, '
+                  '"context_window_size": 200000}, '
+                  '"cost": {"total_cost_usd": 0, "total_duration_ms": 1}}'),
+        "pre_cmds": [["mod", "use", "dracula"]],
+        "spec": {"exit": 0, "stdout_not_contains": ["[hud err]"]},
+        "config_path": os.path.join(tempfile.gettempdir(), "hud-cfg-p11.toml"),
+        "config_content": 'active_mod = ""\n',
+        "note": "主题预设 mod 无 layout → resolve_compact_layout 回退 config 布局",
+    },
+    {
+        "id": "P11-04", "name": "mod preview 无参交互回退：编号选择切换",
+        "dim": "P11", "args": ["mod", "preview"], "stdin": "2\n",
+        "spec": {"exit": 0,
+                 "stdout_contains": ["Switched to mod", "obsidian-command"]},
+        "config_path": os.path.join(tempfile.gettempdir(), "hud-cfg-p11.toml"),
+        "config_content": 'active_mod = ""\n',
+        "note": "非 TTY 回退编号列表；2 → 出厂第 2 个 mod obsidian-command，写注入 config",
+    },
+    {
+        "id": "P11-05", "name": "mod preview 无参交互回退：越界选择报错",
+        "dim": "P11", "args": ["mod", "preview"], "stdin": "0\n",
+        "spec": {"exit": 1, "stderr_contains": ["error:", "invalid"]},
+        "config_path": os.path.join(tempfile.gettempdir(), "hud-cfg-p11.toml"),
+        "config_content": 'active_mod = ""\n',
+        "note": "0 越界 → parse_choice 拒绝，不切换",
+    },
+    {
+        "id": "P11-06", "name": "mod preview 无参交互回退：EOF 退出不切换",
+        "dim": "P11", "args": ["mod", "preview"], "stdin": "",
+        "spec": {"exit": 0, "stdout_not_contains": ["Switched to mod"]},
+        "config_path": os.path.join(tempfile.gettempdir(), "hud-cfg-p11.toml"),
+        "config_content": 'active_mod = ""\n',
+        "note": "stdin EOF → read_line 0 → Ok(None)，active_mod 保持不变",
+    },
+]
+
+
+# ㉕ P13 数据源修复（v0.9）：stale 回退 + scanner 全局扫描。
+# fallback_transcript：预置 projects/<dir>/active.jsonl，stdin transcript_path
+# 指向缺失的 stale.jsonl → 回退 + " ~" 标注（修复 #1 黑盒覆盖）。
+# projects_files：预置 projects/ 活跃 transcript（os.utime 控 age），
+# serve 的 /api/windows 与当前会话卡片数据源 = scanner（修复 #3/#6）。
+P13 = [
+    render_case(
+        "P13-01", "① stale 回退 + 标注", "P13",
+        {"exit": 0, "stdout_contains": ["~"]},
+        stdin=j(full_dict()),
+        config=DEFAULT_CONFIG, remove_projects=True,
+        fallback_transcript={"dir": "p13-a",
+                             "content": '{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":20},"model":"deepseek-v4-flash"},"timestamp":"2026-07-31T10:01:00Z"}\n'},
+        note="报告路径缺失 → 同项目活跃兄弟回退 → 输出尾带 ' ~'（修复 #1）",
+    ),
+    render_case(
+        "P13-02", "① 报告路径新鲜 → 无标注", "P13",
+        {"exit": 0, "stdout_not_contains": ["~"]},
+        stdin=j(full_dict(**{"transcript_path": "/x/fresh/s.jsonl"})),
+        config=DEFAULT_CONFIG,
+        note="路径存在且新鲜 → Reported 无 ' ~'（对照）",
+    ),
+    serve_case(
+        "P13-03", "GET /api/windows 来自 scanner", "/api/windows", 200,
+        "application/json", expect_json=True,
+        expect_json_fields=["windows"],
+        expect_body_contains=['"dir":"p13-b"', '"status":"active"',
+                              '"data_source":"reported"'],
+        remove_projects=True,
+        projects_files=[
+            {"dir": "p13-b", "file": "s.jsonl", "age": 2,
+             "content": '{"type":"assistant","message":{"usage":{"input_tokens":200,"output_tokens":100},"model":"deepseek-v4-flash"},"timestamp":"2026-07-31T10:01:00Z"}\n'},
+        ],
+        note="scanner 取代 windows/*.json：活跃 transcript 直接可见（修复 #3）",
+    ),
+    serve_case(
+        "P13-04", "GET /api/data 当前会话 = scanner 最新活跃窗口", "/api/data", 200,
+        "application/json", expect_json=True,
+        expect_json_fields=["model", "context_pct", "cost_usd"],
+        expect_body_contains=['"model":"deepseek-v4-flash"'],
+        remove_projects=True,
+        projects_files=[
+            {"dir": "p13-c", "file": "s.jsonl", "age": 2,
+             "content": '{"type":"assistant","message":{"usage":{"input_tokens":300,"output_tokens":150},"model":"deepseek-v4-flash"},"timestamp":"2026-07-31T10:01:00Z"}\n'},
+        ],
+        note="修复 #6：当前会话卡片取 scanner 最新活跃窗口，state.json 不再是权威",
+    ),
+    serve_case(
+        "P13-05", "GET /api/windows 无活跃 transcript → 空列表", "/api/windows", 200,
+        "application/json", expect_json=True,
+        expect_body_contains=['"windows":[]'],
+        remove_projects=True,
+        note="projects 清空 → scanner 空视图（不残留 windows/*.json 数据）",
+    ),
+]
+
+
 CASES = D1 + D2 + D3 + D4 + D5 + D6 + D7 + D8 + P1 + P2 + P3 + P4 + P5 + P6 + P7 + P8 \
     + b1_cases() + b2_cases() + b3_cases() + b4_cases() + b5_cases() + b6_cases() \
-    + P9 + P10
+    + P9 + P10 + P11 + P12 + P13 + P14
 # 156 + 3（B1-01..03）+ 1（B2-01）+ 2（B3-01/02）+ 3（B4-01/02/03）+ 3（B5-01/02/03）
-#   + 12（B6-01..12 ⑤⑥⑦ 列表/详情/排行）+ 3（D7-02..04 ⑪ 趋势面板）
+#   + 12（B6-01..12 ⑤⑥⑦ 列表/详情/排行）+ 5（D7-02..06 ⑪ 趋势/空 stdin 回退/坏布局兜底）
 #   + 2（D6-08/13 ⑫ SVG 趋势图）+ 4（D6-09..12 ⑬ 会话列表/详情）
 #   + 2（D6-07/14 ⑭ 周环比）+ 3（P8-01..03 ⑰ mod install 参数校验）
 #   + 1（P2-11 ⑳ v0.7 内置 deepseek 语义）+ 2（P9-01/02 ㉒ totals 总计/按天）
 #   + 1（P9-03 ㉒ totals 活跃窗口段）+ 1（P10-01 ㉓ config 单帧）
-#   + 5（P10-02..06 ㉓ serve /api/config + /config 表单页）= 204
-assert len(CASES) == 204, f"expected 204 cases, got {len(CASES)}"
+#   + 5（P10-02..06 ㉓ serve /api/config + /config 表单页）
+#   + 3（P11-01..03 ㉔ 主题预设作为轻量 mod）+ 3（P11-04..06 ㉔ preview 交互回退）
+#   + 4（P12-01..04 ㉕ totals 折叠/--all/无 ANSI/空态）
+#   + 5（P13-01..05 ㉕ 数据源修复：stale 回退标注 + scanner serve 视图）
+#   + 5（P14-01..05 ㉗ 配置页重构：新字段 GET / POST 落盘 / 读回 / 空值清理 / 卡片表单页）= 226
+assert len(CASES) == 226, f"expected 226 cases, got {len(CASES)}"

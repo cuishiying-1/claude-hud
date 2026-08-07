@@ -29,12 +29,42 @@ impl Widget for ModelDisplay {
     }
 
     fn render_dashboard(&self, data: &SessionData, area: Rect, frame: &mut Frame, _theme: &Theme, config: &WidgetConfig) {
-        let text = format!(
-            "{}: {} ({})",
+        let text = model_label_text(
+            &data.model.display_name,
+            &data.model.id,
             tr(config.lang, "runtime.model_label"),
-            data.model.display_name,
-            data.model.id
         );
         frame.render_widget(Text::from(text), area);
+    }
+}
+
+/// 面板标题行：display_name 与 id 相同（内置注册表兜底）时只显示一个，
+/// 避免 `deepseek-v4-flash (deepseek-v4-flash)` 式冗余。
+fn model_label_text(display_name: &str, id: &str, label: &str) -> String {
+    if display_name == id {
+        format!("{label}: {display_name}")
+    } else {
+        format!("{label}: {display_name} ({id})")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_label_text;
+
+    #[test]
+    fn model_label_text_dedups_when_display_name_equals_id() {
+        assert_eq!(
+            model_label_text("deepseek-v4-flash", "deepseek-v4-flash", "模型"),
+            "模型: deepseek-v4-flash"
+        );
+    }
+
+    #[test]
+    fn model_label_text_keeps_id_when_distinct() {
+        assert_eq!(
+            model_label_text("DeepSeek V4 Flash", "deepseek-v4-flash", "Model"),
+            "Model: DeepSeek V4 Flash (deepseek-v4-flash)"
+        );
     }
 }

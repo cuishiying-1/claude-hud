@@ -27,7 +27,9 @@ DEFAULT_EXE = _default_exe()
 
 def resolve_exe(override: str | None) -> str:
     """Return the claude-hud exe path, validating it exists."""
-    path = override or DEFAULT_EXE
+    # abspath: Windows CreateProcess 无法解析前斜杠相对路径
+    # （isfile 可以，导致 FileNotFoundError [WinError 2]）
+    path = os.path.abspath(override or DEFAULT_EXE)
     if not os.path.isfile(path):
         sys.exit(f"claude-hud exe not found: {path}")
     return path

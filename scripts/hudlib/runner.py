@@ -1,5 +1,4 @@
-"""Process execution and config backup/restore protocol."""
-import filecmp
+"""Process execution for the claude-hud black-box test harness."""
 import os
 import shutil
 import subprocess
@@ -7,8 +6,20 @@ import tempfile
 import time
 
 
-HUD_DIR = os.path.expanduser("~/.claude/plugins/claude-hud")
-BACKUP_MARKER = ".hud-test-backup"
+# 测试 HUD 目录 = 每次运行全新临时目录（CLAUDE_HUD_DIR 注入子进程）。
+# 绝不指向真实 ~/.claude/plugins/claude-hud：用户活跃会话的 render 进程
+# 每 5s 并发写同一目录，会把真实会话结账进测试 history.db（B6-02 偶发
+# #3 幽灵会话根因）。隔离后备份/恢复协议不再需要。
+TEST_HUD_DIR = os.path.join(tempfile.gettempdir(), "claude-hud-test-run", "hud")
+HUD_DIR = TEST_HUD_DIR
+
+
+def ensure_test_hud_dir() -> str:
+    """Reset the isolated HUD dir for this run; return its path."""
+    if os.path.isdir(TEST_HUD_DIR):
+        shutil.rmtree(TEST_HUD_DIR)
+    os.makedirs(TEST_HUD_DIR)
+    return TEST_HUD_DIR
 
 
 class RunResult:
@@ -22,16 +33,19 @@ class RunResult:
 
 
 def run_exe(exe_path, args, stdin_text=None, stdin_file=None,
-            timeout_s=10, env_extra=None):
+            timeout_s=10, env_extra=None, env=None):
     """Run the exe. stdin provided as inline text or a file path.
-    Returns RunResult. Never raises on child failure."""
+    Returns RunResult. Never raises on child failure.
+    env: full child environment (overrides os.environ); env_extra: partial
+    overrides merged last. CLAUDE_HUD_DIR is always injected (test isolation)."""
     if stdin_file:
         stdin_src = open(stdin_file, "rb")
     elif stdin_text is not None:
         stdin_src = None
     else:
         stdin_src = subprocess.DEVNULL
-    env = dict(os.environ)
+    env = dict(env) if env is not None else dict(os.environ)
+    env["CLAUDE_HUD_DIR"] = TEST_HUD_DIR
     if env_extra:
         env.update(env_extra)
     start = time.monotonic()
@@ -71,59 +85,6 @@ def run_exe(exe_path, args, stdin_text=None, stdin_file=None,
         repro += f" <<< '{stdin_text[:120]}...'"
     return RunResult(exit_code, out.decode("utf-8", "replace"),
                      err.decode("utf-8", "replace"), timed_out, duration, repro)
-
-
-def backup_hud_dir() -> str:
-    """Backup ~/.claude/plugins/claude-hud to a temp dir; return backup root.
-    Refuses to run if a previous backup is still present (crash recovery)."""
-    backup_root = os.path.join(tempfile.gettempdir(), "claude-hud-test-backup")
-    marker = os.path.join(backup_root, BACKUP_MARKER)
-    if os.path.exists(marker):
-        raise RuntimeError(
-            f"stale backup marker found at {marker}; previous run did not "
-            f"restore. Restore manually from {backup_root}, then delete the "
-            "marker and re-run."
-        )
-    os.makedirs(backup_root, exist_ok=True)
-    prev = os.path.join(backup_root, "hud")
-    if os.path.isdir(prev):
-        shutil.rmtree(prev)
-    if os.path.isdir(HUD_DIR):
-        shutil.copytree(HUD_DIR, prev, dirs_exist_ok=True)
-    open(marker, "w").write("active")
-    return backup_root
-
-
-def restore_hud_dir(backup_root: str) -> bool:
-    """Restore the HUD dir from backup. Returns True on verified success."""
-    marker = os.path.join(backup_root, BACKUP_MARKER)
-    ok = True
-    try:
-        src = os.path.join(backup_root, "hud")
-        if os.path.isdir(src):
-            if os.path.isdir(HUD_DIR):
-                shutil.rmtree(HUD_DIR)
-            shutil.copytree(src, HUD_DIR)
-            for root, _, files in os.walk(src):
-                for f in files:
-                    a = os.path.join(root, f)
-                    b = a.replace(src, HUD_DIR)
-                    if not os.path.exists(b) or not filecmp.cmp(a, b, shallow=False):
-                        ok = False
-        elif os.path.isdir(HUD_DIR):
-            shutil.rmtree(HUD_DIR)  # dir did not exist before test run
-    except Exception:
-        return False
-    # Fix 5: marker-removal failure must not be silent.  If the byte-verify
-    # passed but os.remove(marker) fails (e.g. permission error), the marker
-    # would survive and block the next run.  Return False so the caller knows
-    # the marker is intentionally left in place (safe crash-recovery state).
-    if ok and os.path.exists(marker):
-        try:
-            os.remove(marker)
-        except OSError:
-            ok = False
-    return ok
 
 
 def write_config(toml_text: str | None):

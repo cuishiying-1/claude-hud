@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 # Windows GBK console can't print ¥ etc.; force UTF-8 so report output survives.
@@ -73,6 +74,16 @@ def prepare_case(case, tmp_dir):
         dst = os.path.join(tmp_dir, f"{case['id']}-transcript.jsonl")
         shutil.copyfile(src, dst)
         case["_transcript_copy_path"] = dst
+    if case.get("fallback_transcript") and not case.get("_fallback_active"):
+        # 预置 <HUD>/projects/<dir>/active.jsonl（回退目标）；stdin 的
+        # transcript_path 将指向同目录缺失的 stale.jsonl（修复 #1 黑盒覆盖）
+        ft = case["fallback_transcript"]
+        proj_dir = os.path.join(runner.HUD_DIR, "projects", ft["dir"])
+        os.makedirs(proj_dir, exist_ok=True)
+        with open(os.path.join(proj_dir, "active.jsonl"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(ft["content"])
+        case["_fallback_active"] = True
     if case.get("stdin") is not None:
         text = case["stdin"]
     elif case.get("stdin_file"):
@@ -83,6 +94,13 @@ def prepare_case(case, tmp_dir):
     if case.get("_transcript_copy_path"):
         data = _json.loads(text)
         data["transcript_path"] = case["_transcript_copy_path"].replace("\\", "/")
+        text = _json.dumps(data)
+    if case.get("_fallback_active"):
+        data = _json.loads(text)
+        data["transcript_path"] = os.path.join(
+            runner.HUD_DIR, "projects",
+            case["fallback_transcript"]["dir"], "stale.jsonl",
+        ).replace("\\", "/")
         text = _json.dumps(data)
     if "<LARGE_FIXTURE>" in text:
         text = text.replace("<LARGE_FIXTURE>",
@@ -104,6 +122,7 @@ def run_serve(exe_path, case):
     # 到 temp 路径（POST 保存不碰真实配置）；其余 serve 用例保持加载真实配置。
     uses_cfg = bool(case.get("config_path") or case.get("config_content"))
     env = dict(os.environ)
+    env["CLAUDE_HUD_DIR"] = runner.TEST_HUD_DIR
     cfg_path = runner.prepare_config_path(case)
     if uses_cfg:
         env["CLAUDE_HUD_CONFIG"] = cfg_path
@@ -179,12 +198,29 @@ def run_serve(exe_path, case):
                 if want in body:
                     fails.append(f"body should not contain {want!r}")
     finally:
-        proc.terminate()
+        # 双保险：terminate 失败（进程已死）也要走到 kill 分支；
+        # 泄漏的 serve 会占住 temp history.db，后续用例 remove_db 报
+        # PermissionError（WinError 32）。
+        try:
+            proc.terminate()
+        except OSError:
+            pass
         try:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=3)
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
 
     # A2: post_free check runs AFTER terminate (port must be released),
     # BEFORE the result dict is built so the verdict lands in passed/detail.
@@ -253,8 +289,18 @@ def run_one(exe_path, case, tmp_dir):
     # config.toml, which must not be clobbered afterwards.
     if case.get("config") is not None:
         runner.write_config(case["config"])
-    elif case["run_kind"] in ("serve", "dashboard"):
+    elif case.get("run_kind", "render") in ("serve", "dashboard"):
         runner.write_config(cases.DEFAULT_CONFIG)
+
+    # P11 注入：显式声明 config_path/config_content 的用例把
+    # CLAUDE_HUD_CONFIG 指向 temp 配置（与 run_serve 同语义，
+    # 避免 mod use 等写操作污染真实 config）。pre_cmd/pre_render 与
+    # 主命令共享同一 env，保证 use 后 current/render 回读一致。
+    case_env = dict(os.environ)
+    if case.get("config_path") or case.get("config_content"):
+        case_env["CLAUDE_HUD_CONFIG"] = runner.prepare_config_path(case)
+    if case.get("env_extra"):
+        case_env.update(case["env_extra"])
 
     # P4 ⑨：可选清空 history.db（必须在任何 checkout 渲染之前）。
     # 连同 -wal/-shm/-journal 兄弟文件一起删：stale journal 会把旧行
@@ -272,6 +318,54 @@ def run_one(exe_path, case, tmp_dir):
         if os.path.isfile(state_path):
             os.remove(state_path)
 
+    # ㉕ P13：可选清理/预置 projects/ 活跃 transcript（scanner 数据源）。
+    # mtime = now - age（os.utime 控新鲜度，≤10s Active / >300s Ended）。
+    if case.get("remove_projects"):
+        proj_root = os.path.join(runner.HUD_DIR, "projects")
+        if os.path.isdir(proj_root):
+            shutil.rmtree(proj_root)
+    if case.get("projects_files"):
+        proj_root = os.path.join(runner.HUD_DIR, "projects")
+        now = int(time.time())
+        for pf in case["projects_files"]:
+            proj_dir = os.path.join(proj_root, pf["dir"])
+            os.makedirs(proj_dir, exist_ok=True)
+            p = os.path.join(proj_dir, pf["file"])
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(pf["content"])
+            os.utime(p, (now - pf.get("age", 0), now - pf.get("age", 0)))
+
+    # ㉕ P12：可选清理/预置 windows/ 快照（造活跃/已结束窗口；ts = now - age）。
+    # StateFile 全字段 serde(default)，最小 JSON 即可被 scan_dir 解析。
+    if case.get("remove_windows"):
+        win_dir = os.path.join(runner.HUD_DIR, "windows")
+        if os.path.isdir(win_dir):
+            shutil.rmtree(win_dir)
+    if case.get("windows_files"):
+        win_dir = os.path.join(runner.HUD_DIR, "windows")
+        os.makedirs(win_dir, exist_ok=True)
+        now = int(time.time())
+        for wf in case["windows_files"]:
+            ts = now - wf.get("age", 0)
+            body = {"snapshot": {
+                "timestamp_secs": ts,
+                "model": {"display_name": wf.get("model", "m")},
+                "context_window": {
+                    "used_percentage": wf.get("pct", 0.0),
+                    "total_input_tokens": wf.get("tokens_in", 0),
+                    "total_output_tokens": wf.get("tokens_out", 0),
+                },
+                "cost": {"total_cost_usd": wf.get("cost", 0.0)},
+                "transcript_path": wf.get("transcript"),
+                "agent_count": wf.get("agents", 0),
+            }}
+            with open(
+                os.path.join(win_dir, wf["key"] + ".json"),
+                "w",
+                encoding="utf-8",
+            ) as fh:
+                _json.dump(body, fh)
+
     # ⑪⑫⑬⑭：可选预置历史库数据（依赖 remove_db 已清空 + 建表在前）
     if case.get("prepare_db_sql"):
         _prepare_db(exe_path, case["prepare_db_sql"])
@@ -284,11 +378,11 @@ def run_one(exe_path, case, tmp_dir):
         if isinstance(pre, dict):
             r = runner.run_exe(exe_path, pre["args"],
                                stdin_text=pre.get("stdin"),
-                               env_extra=case.get("env_extra"),
+                               env=case_env,
                                timeout_s=10)
         else:
             r = runner.run_exe(exe_path, pre,
-                               env_extra=case.get("env_extra"),
+                               env=case_env,
                                timeout_s=10)
         if r.exit_code != 0 or r.timed_out:
             pre_warnings.append(f"pre_cmd exit={r.exit_code}: {pre!r}")
@@ -305,7 +399,7 @@ def run_one(exe_path, case, tmp_dir):
         else:
             pre_text = prepare_case({"stdin": pre_text}, tmp_dir)
         r = runner.run_exe(exe_path, ["render"], stdin_text=pre_text,
-                           env_extra=case.get("env_extra"),
+                           env=case_env,
                            timeout_s=10)
         if case.get("pre_exit") is not None and r.exit_code != case["pre_exit"]:
             pre_fails.append(
@@ -325,7 +419,7 @@ def run_one(exe_path, case, tmp_dir):
         if os.path.isfile(sp):
             os.remove(sp)
 
-    if case["run_kind"] == "serve":
+    if case.get("run_kind", "render") == "serve":
         result = run_serve(exe_path, case)
         if pre_warnings:
             result["detail"] = (
@@ -333,18 +427,18 @@ def run_one(exe_path, case, tmp_dir):
             )
         return result
 
-    if case["run_kind"] == "config":
+    if case.get("run_kind", "render") == "config":
         result = run_config(exe_path, case)
         if pre_warnings:
             result["detail"] = "; ".join(pre_warnings) + "; " + result["detail"]
         return result
 
-    if case["run_kind"] == "dashboard":
-        r = runner.run_exe(exe_path, case["args"], timeout_s=10)
+    if case.get("run_kind", "render") == "dashboard":
+        r = runner.run_exe(exe_path, case["args"], env=case_env, timeout_s=10)
     else:
         stdin_text = prepare_case(case, tmp_dir)
         r = runner.run_exe(exe_path, case["args"], stdin_text=stdin_text,
-                           env_extra=case.get("env_extra"),
+                           env=case_env,
                            timeout_s=10)
 
     passed, detail = assertions.check(r, case["spec"])
@@ -454,37 +548,28 @@ def _select_cases(selected_id, all_cases):
     return selected
 
 
-def _backup_protocol(exe_path, snap):
-    """Backup HUD dir; return backup_root.  Exits on stale marker."""
-    try:
-        backup_root = runner.backup_hud_dir()
-    except RuntimeError as e:
-        print(f"[hud-test] ERROR: {e}")
-        sys.exit(1)
-    return backup_root
-
-
-def _run_suite(exe_path, snap, selected, backup_root):
+def _run_suite(exe_path, snap, selected):
     """Run selected cases with settings protection and tmp lifecycle.
 
-    Fix 3: settings backup and tmp_dir creation live inside the try so a
-    failure there still triggers hud restore + settings restore + tmp cleanup.
+    Fix 3: settings backup and tmp creation live inside the try so a
+    failure there still triggers settings restore + tmp cleanup.
+    HUD dir is an isolated temp dir (CLAUDE_HUD_DIR injected per process),
+    so no hud backup/restore is needed — the user's real dir is never
+    touched, and the user's live render cannot pollute test state.
     """
     settings_path = os.path.expanduser("~/.claude/settings.json")
     had_settings = os.path.isfile(settings_path)
     _settings_bak = None
     results = []
-    restored = False
-    tmp_dir = os.path.join(backup_root, "tmp")
+    settings_ok = True
+    tmp_dir = os.path.join(
+        tempfile.gettempdir(), "claude-hud-test-fixtures"
+    )
     try:
         # A4: settings.json protection — backup INSIDE try per Fix 3
         if had_settings:
             with open(settings_path, "rb") as f:
                 _settings_bak = f.read()
-            with open(
-                os.path.join(backup_root, "settings.json.bak"), "wb"
-            ) as f:
-                f.write(_settings_bak)
 
         os.makedirs(tmp_dir, exist_ok=True)
 
@@ -499,18 +584,8 @@ def _run_suite(exe_path, snap, selected, backup_root):
                 f"{last.get('detail', '')}"
             )
     finally:
-        restored = runner.restore_hud_dir(backup_root)
-        if not restored:
-            print(
-                "!! CONFIG RESTORE FAILED — check "
-                "~/.claude/plugins/claude-hud manually"
-            )
-
         # A4: restore settings.json
-        backup_status_parts = [
-            "config-restored" if restored else "config-restore-failed"
-        ]
-        settings_ok = True
+        backup_status_parts = []
         try:
             if had_settings:
                 current_bytes = b""
@@ -543,7 +618,7 @@ def _run_suite(exe_path, snap, selected, backup_root):
         # Fix 3: tmp cleanup after everything else
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    return results, restored
+    return results, settings_ok
 
 
 def main():
@@ -567,10 +642,10 @@ def main():
     print(f"[hud-test] exe: {exe_path}")
     selected = _select_cases(args.case, cases.CASES)
 
-    backup_root = _backup_protocol(exe_path, snap)
+    runner.ensure_test_hud_dir()
 
     overall_start = time.monotonic()
-    results, _restored = _run_suite(exe_path, snap, selected, backup_root)
+    results, _restored = _run_suite(exe_path, snap, selected)
 
     md = report.render_report(
         snap, results, time.monotonic() - overall_start

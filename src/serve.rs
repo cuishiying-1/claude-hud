@@ -7,7 +7,11 @@ use serde_json::json;
 
 use crate::core::ansi;
 use crate::core::config::AppConfig;
+use crate::core::data_source::DataSource;
 use crate::core::history::{HistoryStore, SessionRecord, WeekAgg};
+use crate::core::scanner::{default_projects_root, model_windows_from_config, WindowsScanner};
+use crate::core::windows::WindowInfo;
+use crate::core::session::{ContextWindow, CostInfo, CurrentUsage, ModelInfo, RateLimits, SessionData};
 use crate::core::transcript::TranscriptSummary;
 use crate::core::i18n::tr;
 use crate::core::state;
@@ -75,7 +79,10 @@ pub fn run(
                 let _ = request.respond(response);
             }
             "/api/data" => {
-                let json = build_api_json(registry, config, theme);
+                let session_id = query_param(query, "session_id")
+                    .and_then(|v| v.parse::<i64>().ok());
+                let json =
+                    build_api_json(registry, config, theme, session_id, current_session(config));
                 let header = "Content-Type: application/json"
                     .parse::<tiny_http::Header>()
                     .unwrap();
@@ -92,7 +99,11 @@ pub fn run(
                 let body = match HistoryStore::open() {
                     Ok(h) => {
                         let rows = h.sessions_page(limit, offset, None).unwrap_or_default();
-                        sessions_list_json(&rows).to_string()
+                        // 前端 loadSessions 读 data.currency_symbol 显示成本列币种；
+                        // 缺失时回退 '$'（与 totals 同款注入）。
+                        let mut v = sessions_list_json(&rows);
+                        v["currency_symbol"] = json!(config.currency());
+                        v.to_string()
                     }
                     Err(_) => json!({"available": false, "sessions": []}).to_string(),
                 };
@@ -122,9 +133,10 @@ pub fn run(
                 }
             }
             "/api/windows" => {
-                let wins =
-                    crate::core::windows::scan_windows(crate::core::state::now_secs());
-                let body = windows_json(&wins).to_string();
+                let wins = scanned_windows(config);
+                let mut v = windows_json(&wins);
+                v["currency_symbol"] = json!(config.currency());
+                let body = v.to_string();
                 let header = "Content-Type: application/json"
                     .parse::<tiny_http::Header>()
                     .unwrap();
@@ -338,32 +350,128 @@ fn flatten_json(prefix: &str, v: &serde_json::Value, out: &mut Vec<(String, Stri
     }
 }
 
+/// 5s 间隔全局扫描缓存：serve 进程内唯一 scanner。窗口视图与当前会话
+/// 卡片的数据源（state.json 不再作为展示权威 → last-writer-wins 竞争消解）。
+static SERVE_SCANNER: Mutex<Option<(Instant, WindowsScanner, Vec<WindowInfo>)>> =
+    Mutex::new(None);
+
+const SCAN_INTERVAL: Duration = Duration::from_secs(5);
+
+fn scanned_windows(config: &AppConfig) -> Vec<WindowInfo> {
+    let mut guard = SERVE_SCANNER.lock().unwrap();
+    if guard.is_none() {
+        // last 初始化为「已过期」→ 首次调用立即扫描（否则首 5s 内空视图）
+        *guard = Some((
+            Instant::now() - SCAN_INTERVAL,
+            WindowsScanner::new(
+                default_projects_root(),
+                crate::core::pricing::merged_pricing(config),
+                model_windows_from_config(config),
+            ),
+            Vec::new(),
+        ));
+    }
+    let (last, scanner, cache) = guard.as_mut().expect("initialized above");
+    if last.elapsed() >= SCAN_INTERVAL {
+        *cache = scanner.scan();
+        *last = Instant::now();
+    }
+    cache.clone()
+}
+
+/// 当前会话：scanner 最新活跃窗口（修复 #6 交付）；无活跃窗口 →
+/// state 快照兜底（会话整体空闲时仍有数据可看）。
+fn current_session(config: &AppConfig) -> Option<SessionData> {
+    scanned_windows(config)
+        .into_iter()
+        .find(|w| w.status == crate::core::windows::WindowStatus::Active)
+        .map(|w| session_data_from_window(&w, config))
+        .or_else(|| state::read_current_data())
+}
+
+/// scanner 窗口 → SessionData（当前会话卡片）：模型 display = id，
+/// usage 从 transcript 累计 token 填充，成本为单价计算值（≈ 口径）。
+pub fn session_data_from_window(
+    w: &WindowInfo,
+    config: &AppConfig,
+) -> SessionData {
+    let window = crate::core::pricing::model_window(config, &w.model).unwrap_or(0);
+    let pct = if window > 0 {
+        ((w.tokens_in + w.tokens_out) as f64 / window as f64 * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+    SessionData {
+        model: ModelInfo {
+            id: w.model.clone(),
+            display_name: w.model.clone(),
+        },
+        context_window: ContextWindow {
+            used_percentage: pct,
+            total_input_tokens: w.tokens_in,
+            total_output_tokens: w.tokens_out,
+            context_window_size: window,
+            current_usage: CurrentUsage {
+                input_tokens: w.tokens_in,
+                output_tokens: w.tokens_out,
+                cache_creation_input_tokens: w.cache_created,
+                cache_read_input_tokens: w.cache_read,
+            },
+        },
+        cost: CostInfo {
+            total_cost_usd: w.cost,
+            total_duration_ms: 0,
+            total_lines_added: 0,
+            total_lines_removed: 0,
+        },
+        rate_limits: RateLimits::default(),
+        transcript_path: None,
+        subagent_status_line: None,
+        data_source: DataSource::Reported,
+    }
+}
+
 fn build_api_json(
     registry: &WidgetRegistry,
     config: &AppConfig,
     theme: &Theme,
+    session_id: Option<i64>,
+    current: Option<SessionData>,
 ) -> String {
-    let mut data = state::read_current_data().unwrap_or_default();
+    // ㉒ session_id → 历史会话数据（pct 为 total_tokens ÷ 窗口的估算值）；
+    // None → 当前会话：scanner 最新活跃窗口优先，state 快照兜底。
+    let mut data = match session_id {
+        Some(id) => session_data_by_id(id, config).unwrap_or_default(),
+        None => current.unwrap_or_else(|| state::read_current_data().unwrap_or_default()),
+    };
     // v0.7 窗口单点解析：serve 的 /api/data pct 同样吃真实窗口（覆盖 200k 兜底）
     crate::core::pricing::resolve_context_window(&mut data, config);
     let layout = &config.compact_layout;
 
+    let lang = config.language();
     let widgets_json: Vec<Value> = layout
         .iter()
         .filter_map(|id| {
             let widget = registry.get(id)?;
             let widget_config = config.widget_config(id);
             let rendered = widget.render_compact(&data, theme, &widget_config);
+            // widget.<id> key 存在 → 翻译；否则回退原显示名（与 draw_tabbed 同口径）
+            let translated = crate::core::i18n::tr_dyn(lang, id);
+            let name = if translated == id.as_str() {
+                widget.display_name().to_string()
+            } else {
+                translated.into_owned()
+            };
             Some(json!({
                 "id": id,
-                "name": widget.display_name(),
+                "name": name,
                 // web 显示纯文本：compact 输出的 ANSI 色码在浏览器里是乱码
                 "output": ansi::strip_ansi(&rendered),
             }))
         })
         .collect();
 
-    let pricing_configured = config.pricing.contains_key(&data.model.id);
+    let pricing_configured = model_pricing_configured(config, &data.model.id);
     let (weekly, trend, wc) = cached_history();
     json!({
         "model": data.model.display_name,
@@ -373,12 +481,23 @@ fn build_api_json(
         "currency_symbol": config.currency(),
         "cost_usd": data.cost.total_cost_usd,
         "duration_ms": data.cost.total_duration_ms,
+        "total_input_tokens": data.context_window.total_input_tokens,
+        "total_output_tokens": data.context_window.total_output_tokens,
+        // ㉒ 当前查看目标：null = 实时会话；数字 = 历史会话（pct 为估算值）
+        "session_id": session_id,
         "weekly": weekly,
         "trend": trend,
         "week_compare": wc,
         "widgets": widgets_json,
     })
     .to_string()
+}
+
+/// 模型是否有已知单价（内置注册表或用户 [pricing]/[models] 覆盖）。
+/// 与注入路径（pricing::inject_cost 的 merged 口径）一致：v0.7 内置注册表
+/// 后不得只查 [pricing] 段——内置模型未手写配置 ≠ 未配置单价。
+fn model_pricing_configured(config: &AppConfig, model_id: &str) -> bool {
+    crate::core::pricing::merged_pricing(config).contains_key(model_id)
 }
 
 /// ⑨ 本周聚合统计：open/query 失败 → available:false 全 0（前端显示 —）。
@@ -430,7 +549,8 @@ pub fn trend_svg(days: &[(String, f64)]) -> Option<String> {
         return None;
     }
     let (w, h) = (560.0_f64, 64.0_f64);
-    let (ml, mt, mr, mb) = (8.0_f64, 6.0_f64, 8.0_f64, 16.0_f64);
+    // 顶边距 10 给数值标注留位（点上方 y-3，字号 7 需约 10px 净高）
+    let (ml, mt, mr, mb) = (8.0_f64, 10.0_f64, 8.0_f64, 16.0_f64);
     let max = days.iter().map(|(_, c)| *c).fold(0.0, f64::max).max(0.0001);
     let inner_w = w - ml - mr;
     let inner_h = h - mt - mb;
@@ -442,12 +562,20 @@ pub fn trend_svg(days: &[(String, f64)]) -> Option<String> {
     };
     let mut points = String::new();
     let mut circles = String::new();
+    let mut values = String::new();
     for i in 0..n {
         let (x, y) = xy(i);
         points.push_str(&format!("{:.1},{:.1} ", x, y));
         circles.push_str(&format!(
             r##"<circle cx="{:.1}" cy="{:.1}" r="1.5" fill="#4c8dff"/>"##,
             x, y
+        ));
+        // 数据标注：点上方的数值（2 位小数），与折线同色系灰
+        values.push_str(&format!(
+            r##"<text x="{:.1}" y="{:.1}" font-size="7" fill="#8b949e" text-anchor="middle">{:.2}</text>"##,
+            x,
+            y - 3.0,
+            days[i].1
         ));
     }
     let mut labels = String::new();
@@ -468,6 +596,7 @@ pub fn trend_svg(days: &[(String, f64)]) -> Option<String> {
         r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w:.0} {h:.0}" style="width:100%;height:64px;">
 <polyline points="{points}" fill="none" stroke="#4c8dff" stroke-width="1.5"/>
 {circles}
+{values}
 {labels}
 </svg>"##,
         w = w,
@@ -542,6 +671,63 @@ fn week_compare_json_inner() -> Value {
         .and_then(|h| h.weekly_compare().ok())
         .unwrap_or((None, None));
     week_compare_json(this.as_ref(), last.as_ref())
+}
+
+/// ㉒ 历史会话 → SessionData（/api/data?session_id 用）：transcript 细分
+/// in/out 优先，缺 transcript 则 in=total_tokens/out=0；pct = 总 token ÷
+/// 模型窗口（v0.7 窗口单点，估算口径），窗口未知 → 0（前端显示 —）。
+pub fn session_data_from_record(
+    record: &SessionRecord,
+    summary: Option<&TranscriptSummary>,
+    config: &AppConfig,
+) -> SessionData {
+    let (t_in, t_out) = match summary {
+        Some(s) => (s.total_tokens.input, s.total_tokens.output),
+        None => (record.total_tokens, 0),
+    };
+    let window = crate::core::pricing::model_window(config, &record.model).unwrap_or(0);
+    let pct = if window > 0 {
+        ((t_in + t_out) as f64 / window as f64 * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+    SessionData {
+        model: ModelInfo {
+            id: record.model.clone(),
+            display_name: record.model.clone(),
+        },
+        context_window: ContextWindow {
+            used_percentage: pct,
+            total_input_tokens: t_in,
+            total_output_tokens: t_out,
+            context_window_size: window,
+            current_usage: CurrentUsage::default(),
+        },
+        cost: CostInfo {
+            total_cost_usd: record.total_cost_usd,
+            total_duration_ms: record.duration_secs * 1000,
+            total_lines_added: 0,
+            total_lines_removed: 0,
+        },
+        rate_limits: RateLimits::default(),
+        transcript_path: record.transcript_path.clone(),
+        subagent_status_line: None,
+        data_source: DataSource::Reported,
+    }
+}
+
+/// ㉒ 按 id 解析历史会话数据：库不可用/未找到 → None（前端保持当前会话视图）。
+fn session_data_by_id(id: i64, config: &AppConfig) -> Option<SessionData> {
+    let store = HistoryStore::open().ok()?;
+    let record = store.session_by_id(id).ok()??;
+    let summary = record.transcript_path.as_deref().and_then(|p| {
+        if std::path::Path::new(p).exists() {
+            Some(crate::core::transcript::TranscriptReader::new(p.into()).read_updates())
+        } else {
+            None
+        }
+    });
+    Some(session_data_from_record(&record, summary.as_ref(), config))
 }
 
 /// ⑬ 单会话详情接线：session_by_id → transcript 尾读 → 详情 JSON。
@@ -647,6 +833,9 @@ fn windows_json(wins: &[crate::core::windows::WindowInfo]) -> Value {
                 "agents": w.agent_count,
                 "corrupt": w.corrupt,
                 "status": crate::core::windows::status_name(&w.status),
+                "cache_read": w.cache_read,
+                "cache_created": w.cache_created,
+                "data_source": w.data_source,
             })
         })
         .collect();
@@ -745,6 +934,11 @@ fn build_dashboard_html(
 <div class="header">
   <h1>{web_heading}</h1>
   <div class="status">● Live · <span id="update-time">--</span></div>
+  <div style="margin-top:10px;">
+    <select id="session-select" style="background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;padding:3px 8px;font-size:11px;max-width:480px;">
+      <option value="">{web_current_session}</option>
+    </select>
+  </div>
 </div>
 
 <div id="pricing-note" style="display:none;color:#d29922;font-size:11px;margin-bottom:12px;"></div>
@@ -754,7 +948,7 @@ fn build_dashboard_html(
     <div class="card-value" id="val-model">--</div>
   </div>
   <div class="card">
-    <div class="card-title">{web_ctx_window}</div>
+    <div class="card-title">{web_ctx_window}<span id="ctx-est" style="display:none;color:#8b949e;font-size:9px;">{web_ctx_estimated}</span></div>
     <div class="metric-big" id="val-ctx">--</div>
     <div class="metric-label">{web_used}</div>
     <div class="bar"><div class="bar-fill" id="bar-ctx" style="width:0%;background:linear-gradient(90deg,#7ee787,#f0883e,#ff7b72);"></div></div>
@@ -834,15 +1028,20 @@ const T = {
   week_compare: "T_WEEK_COMPARE",
   totals_line: "T_TOTALS_LINE",
 };
+let selectedSession = '';
 async function refresh() {
   try {
-    const resp = await fetch('/api/data');
+    const resp = await fetch('/api/data' + (selectedSession ? '?session_id=' + selectedSession : ''));
     const data = await resp.json();
     document.getElementById('val-model').textContent = data.model;
-    document.getElementById('val-ctx').textContent = Math.round(data.context_pct) + '%';
+    // ㉒ 历史会话 pct 为 total_tokens ÷ 窗口估算值 → 标注（估算）；实时会话隐藏
+    document.getElementById('ctx-est').style.display = data.session_id ? 'inline' : 'none';
+    // 诚实降级：无成本/用量数据（上游不提供 usage）→ 「—」，不显示 0%/¥0.0000 假精确
+    const noUsage = data.cost_usd === 0 && data.total_input_tokens === 0 && data.total_output_tokens === 0;
+    document.getElementById('val-ctx').textContent = noUsage ? '—' : Math.round(data.context_pct) + '%';
     document.getElementById('bar-ctx').style.width = data.context_pct + '%';
     const cur = data.currency_symbol || '$';
-    document.getElementById('val-cost').textContent = cur + data.cost_usd.toFixed(4);
+    document.getElementById('val-cost').textContent = noUsage ? '—' : cur + data.cost_usd.toFixed(4);
     const mins = Math.floor(data.duration_ms / 60000);
     const secs = Math.floor((data.duration_ms % 60000) / 1000);
     document.getElementById('val-dur').textContent = mins + 'm ' + secs + 's';
@@ -886,7 +1085,7 @@ async function refresh() {
         title.textContent = w.name;
         const body = document.createElement('div');
         body.style.cssText = 'font-size:11px;color:#c9d1d9;white-space:pre-wrap;';
-        body.textContent = w.output;
+        body.textContent = w.output || '—';
         div.appendChild(title);
         div.appendChild(body);
         area.appendChild(div);
@@ -985,9 +1184,10 @@ async function loadWindows() {
     const empty = document.getElementById('windows-empty');
     if (rows.length === 0) { tbody.innerHTML = ''; empty.style.display = ''; return; }
     empty.style.display = 'none';
+    const sym = d.currency_symbol || '$';
     tbody.innerHTML = rows.map(w =>
       '<tr><td>' + w.status + '</td><td>' + w.dir + '</td><td>' + w.model + '</td>' +
-      '<td>' + Math.round(w.pct) + '%</td><td>' + w.cost.toFixed(2) + '</td>' +
+      '<td>' + Math.round(w.pct) + '%</td><td>' + sym + w.cost.toFixed(2) + '</td>' +
       '<td>' + w.tokens + '</td><td>' + w.agents + '</td></tr>'
     ).join('');
   } catch(e) { console.error('windows error:', e); }
@@ -1009,6 +1209,28 @@ loadWindows();
 loadTotals();
 setInterval(() => { loadWindows(); loadTotals(); }, 2000);
 loadSessions();
+document.getElementById('sessions-more').addEventListener('click', loadSessions);
+// ㉒ 会话选择器：填充历史会话下拉；切换 → 带 session_id 刷新 /api/data
+async function loadSessionOptions() {
+  try {
+    const resp = await fetch('/api/sessions?limit=50&offset=0');
+    const data = await resp.json();
+    const sel = document.getElementById('session-select');
+    if (data.available && data.sessions) {
+      data.sessions.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = '#' + s.id + '  ' + s.started_at + '  ' + s.model;
+        sel.appendChild(opt);
+      });
+    }
+  } catch(e) { console.error('session options error:', e); }
+}
+document.getElementById('session-select').addEventListener('change', e => {
+  selectedSession = e.target.value;
+  refresh();
+});
+loadSessionOptions();
 refresh();
 setInterval(refresh, 2000);
 </script>
@@ -1057,9 +1279,12 @@ setInterval(refresh, 2000);
         .replace("{web_w_col_agents}", tr(lang, "web.w_col_agents"))
         .replace("{web_totals_title}", tr(lang, "web.totals_title"))
         .replace("T_TOTALS_LINE", tr(lang, "web.totals_line"))
+        .replace("{web_current_session}", tr(lang, "web.current_session"))
+        .replace("{web_ctx_estimated}", tr(lang, "web.ctx_estimated"))
 }
 
-/// /config 表单页：服务端渲染字段控件 + 内联 JS（读 /api/config 填表、POST 提交）。
+/// /config 卡片分组表单页：服务端渲染字段控件 + 内联 JS
+/// （读 /api/config 填表、脏标记、卡片级错误高亮、POST 提交）。
 fn build_config_html(
     registry: &WidgetRegistry,
     _config: &AppConfig,
@@ -1067,12 +1292,28 @@ fn build_config_html(
 ) -> String {
     use crate::core::config_schema;
     let t = |k: &'static str| tr(lang, k);
-    let mut groups_html = String::new();
+    let is_new = |k: &str| {
+        matches!(
+            k,
+            "runtime_overrides.compact_lines"
+                | "runtime_overrides.animation.enabled"
+                | "theme.icon_set"
+        )
+    };
+    let fields = config_schema::fields();
+    let mut cards_html = String::new();
     for g in config_schema::Group::all() {
+        let gfields: Vec<&config_schema::FieldDef> =
+            fields.iter().filter(|f| f.group == g).collect();
         let mut rows = String::new();
-        for f in config_schema::fields().iter().filter(|f| f.group == g) {
-            let label = t(f.label);
+        for f in &gfields {
             let key = f.key;
+            let label = t(f.label);
+            let new_badge = if is_new(key) {
+                "<span class=\"new\">NEW</span>"
+            } else {
+                ""
+            };
             let control = match f.kind {
                 config_schema::FieldKind::Choice => {
                     let opts = config_schema::options_for(f, registry);
@@ -1110,14 +1351,25 @@ fn build_config_html(
                     format!("<input type=\"text\" id=\"{key}\" name=\"{key}\" placeholder=\"50,80,100\">")
                 }
                 _ => {
-                    format!("<input type=\"text\" id=\"{key}\" name=\"{key}\">")
+                    // compact_lines 空值 = auto（跟随布局），占位提示
+                    let ph = if key == "runtime_overrides.compact_lines" {
+                        " placeholder=\"auto\""
+                    } else {
+                        ""
+                    };
+                    format!("<input type=\"text\" id=\"{key}\" name=\"{key}\"{ph}>")
                 }
             };
-            rows.push_str(&format!("<tr><td>{label}</td><td>{control}</td></tr>"));
+            rows.push_str(&format!(
+                "<div class=\"row\"><span class=\"label\">{new_badge} {label}</span>\
+                 <span class=\"ctl\">{control}</span></div>"
+            ));
         }
-        groups_html.push_str(&format!(
-            "<h3>{}</h3><table>{}</table>",
-            t(g.name()),
+        let count = t("web.cfg_group_count").replace("{n}", &gfields.len().to_string());
+        cards_html.push_str(&format!(
+            "<div class=\"card\" data-group=\"{}\"><div class=\"card-title\">{}</div>{}</div>",
+            g.name(),
+            format!("{} · {}", t(g.name()), count),
             rows
         ));
     }
@@ -1125,24 +1377,83 @@ fn build_config_html(
         r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{cfg_title}</title>
 <style>
-body {{ font-family: sans-serif; margin: 2rem; }}
-table {{ border-collapse: collapse; }}
-td {{ padding: 0.25rem 1rem 0.25rem 0; }}
-select, input[type=text] {{ min-width: 16rem; }}
-#status {{ margin-top: 1rem; font-weight: bold; }}
-.error {{ color: #c00; }}
+body {{ font-family: sans-serif; margin: 0; background: #f6f7f9; color: #1a1a2e; }}
+.savebar {{ position: sticky; top: 0; z-index: 10; display: flex; align-items: center;
+  justify-content: space-between; gap: 1rem; background: #fff;
+  border-bottom: 1px solid #e2e4e8; padding: 0.6rem 1.2rem; }}
+.save-title {{ font-weight: 700; font-size: 14px; }}
+.save-hint {{ font-weight: 400; color: #999; font-size: 12px; }}
+.savebar-actions {{ display: flex; align-items: center; gap: 0.6rem; }}
+.badge {{ display: none; color: #b45309; background: #fef3c7; border-radius: 6px;
+  padding: 0.15rem 0.5rem; font-size: 12px; font-weight: 600; }}
+button[type=submit] {{ background: #2563eb; color: #fff; border: 0;
+  border-radius: 6px; padding: 0.3rem 1rem; font-weight: 600; cursor: pointer; }}
+.wrap {{ max-width: 64rem; margin: 1.2rem auto; padding: 0 1.2rem; }}
+.cards {{ display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; }}
+@media (max-width: 48rem) {{ .cards {{ grid-template-columns: 1fr; }} }}
+.card {{ background: #fff; border: 1px solid #e2e4e8; border-radius: 10px;
+  padding: 0.8rem 1rem; }}
+.card-title {{ font-weight: 700; margin-bottom: 0.5rem; color: #1a1a2e; }}
+.card .count {{ color: #999; font-weight: 400; font-size: 11px; }}
+.card-error {{ border-color: #c00; }}
+.row {{ display: flex; align-items: center; justify-content: space-between;
+  padding: 0.28rem 0; }}
+.row + .row {{ border-top: 1px solid #f0f1f4; }}
+.label {{ color: #444; }}
+.ctl select, .ctl input[type=text] {{ border: 1px solid #d0d3d9;
+  border-radius: 6px; padding: 0.15rem 0.4rem; background: #fff; min-width: 12rem; }}
+.ctl input[type=checkbox] {{ width: 16px; height: 16px; accent-color: #2563eb; }}
+.new {{ background: #16a34a; color: #fff; border-radius: 4px; padding: 0 0.3rem;
+  font-size: 10px; margin-right: 0.3rem; vertical-align: 1px; }}
+.pricing {{ border: 1px dashed #c9cdd6; border-radius: 10px; padding: 0.8rem 1rem;
+  margin-top: 0.9rem; background: #fff; }}
+.pricing-title {{ font-weight: 700; color: #1a1a2e; }}
+.pricing-readonly {{ color: #999; font-size: 11px; font-weight: 400; }}
+.pricing-toggle {{ color: #2563eb; font-size: 12px; cursor: pointer;
+  user-select: none; margin-left: 0.4rem; }}
+.pricing-summary {{ color: #999; font-size: 12px; margin-top: 0.3rem; }}
+#pricing-body {{ display: none; margin-top: 0.6rem; }}
+#pricing-body table {{ border-collapse: collapse; font-size: 12px; width: 100%; }}
+#pricing-body th, #pricing-body td {{ padding: 0.2rem 0.5rem;
+  border-bottom: 1px solid #f0f1f4; text-align: left; }}
+#status {{ font-weight: bold; font-size: 13px; }}
+#status.ok {{ color: #16a34a; }}
+#status.err {{ color: #c00; }}
 </style></head>
 <body>
-<h1>{cfg_title}</h1>
+<div class="savebar">
+  <div class="save-title">{cfg_title}<span class="save-hint">{cfg_save_hint}</span></div>
+  <div class="savebar-actions">
+    <span class="badge" id="dirty">{cfg_dirty}</span>
+    <button type="submit" form="cfg-form">{cfg_save}</button>
+  </div>
+</div>
+<div class="wrap">
 <form id="cfg-form" onsubmit="return submitCfg(event)">
-{groups_html}
-<h2>{cfg_readonly}</h2>
-<div id="readonly"></div>
-<button type="submit">{cfg_save}</button>
-<span id="status"></span>
+<div class="cards">{cards_html}</div>
+<div class="pricing">
+  <div class="pricing-title">{cfg_models_title}
+    <span class="pricing-readonly">· {cfg_readonly_note}</span>
+    <span class="pricing-toggle" id="pricing-toggle" onclick="togglePricing()">{cfg_models_toggle} ▾</span>
+  </div>
+  <div class="pricing-summary" id="pricing-summary"></div>
+  <div id="pricing-body"></div>
+</div>
 </form>
+<p id="status"></p>
+</div>
 <script>
 const CFG_KEYS = [FIELDS_JSON];
+let dirty = false;
+function markDirty() {{
+  if (!dirty) {{
+    dirty = true;
+    document.getElementById('dirty').style.display = 'inline-block';
+  }}
+}}
+document.querySelectorAll('#cfg-form input, #cfg-form select').forEach(el => {{
+  ['input', 'change'].forEach(ev => el.addEventListener(ev, markDirty));
+}});
 async function loadCfg() {{
   const r = await fetch('/api/config');
   const d = await r.json();
@@ -1154,16 +1465,31 @@ async function loadCfg() {{
     else el.value = v;
   }}
   const ro = d.readonly.models || [];
-  document.getElementById('readonly').innerHTML =
+  const n = ro.length;
+  const first = ro.slice(0, 1).map(m =>
+    `${{m.id}} · ${{m.window}} · $${{m.usd_in}} / $${{m.usd_out}}`).join('');
+  document.getElementById('pricing-summary').textContent =
+    (first ? first + ' …' : '') +
+    (n ? ' · ' + '{cfg_group_count}'.replace('{{n}}', n) : '');
+  document.getElementById('pricing-body').innerHTML =
     '<table><tr><th>model</th><th>window</th><th>USD in</th><th>USD out</th><th>CNY in</th><th>CNY out</th></tr>' +
     ro.map(m => `<tr><td>${{m.id}}</td><td>${{m.window}}</td><td>${{m.usd_in}}</td><td>${{m.usd_out}}</td><td>${{m.cny_in}}</td><td>${{m.cny_out}}</td></tr>`).join('') +
     '</table>';
+}}
+function togglePricing() {{
+  const body = document.getElementById('pricing-body');
+  const toggle = document.getElementById('pricing-toggle');
+  const open = body.style.display !== 'block';
+  body.style.display = open ? 'block' : 'none';
+  toggle.textContent = '{cfg_models_toggle} ' + (open ? '▴' : '▾');
 }}
 function collectCfg() {{
   const out = {{}};
   for (const k of CFG_KEYS) {{
     const els = document.querySelectorAll(`[name="${{k}}"]`);
     if (!els.length) continue;
+    // Table 形态主题（custom）跳过提交：服务端会报「手工编辑」误错
+    if (k === 'theme' && els[0].value === '(custom)') continue;
     if (els[0].type === 'checkbox') {{ out[k] = els[0].checked ? 'true' : 'false'; continue; }}
     if (els.length > 1) {{ out[k] = [...els].filter(e => e.checked).map(e => e.value).join(','); continue; }}
     out[k] = els[0].value;
@@ -1174,13 +1500,26 @@ async function submitCfg(ev) {{
   ev.preventDefault();
   const status = document.getElementById('status');
   status.className = '';
+  document.querySelectorAll('.card-error').forEach(c => c.classList.remove('card-error'));
   try {{
-    const r = await fetch('/api/config', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(collectCfg()) }});
+    const r = await fetch('/api/config', {{ method: 'POST',
+      headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(collectCfg()) }});
     const d = await r.json();
-    if (d.ok) {{ status.textContent = '{cfg_saved}'; }}
-    else {{ status.textContent = '{cfg_error}'.replace('{{err}}', (d.field ? d.field + ': ' : '') + d.error); status.className = 'error'; }}
+    if (d.ok) {{
+      status.textContent = '{cfg_saved}'; status.className = 'ok';
+      dirty = false;
+      document.getElementById('dirty').style.display = 'none';
+    }} else {{
+      status.textContent = '{cfg_error}'.replace('{{err}}', (d.field ? d.field + ': ' : '') + d.error);
+      status.className = 'err';
+      if (d.field) {{
+        const el = document.querySelector(`[name="${{d.field}}"]`);
+        const card = el && el.closest('.card');
+        if (card) card.classList.add('card-error');
+      }}
+    }}
   }} catch (e) {{
-    status.textContent = '{cfg_error}'.replace('{{err}}', e); status.className = 'error';
+    status.textContent = '{cfg_error}'.replace('{{err}}', e); status.className = 'err';
   }}
   return false;
 }}
@@ -1188,10 +1527,16 @@ loadCfg();
 </script>
 </body></html>"#,
         cfg_title = t("web.cfg_title"),
-        cfg_readonly = t("web.cfg_readonly_title"),
+        cfg_save_hint = t("web.cfg_save_hint"),
+        cfg_dirty = t("web.cfg_dirty"),
+        cfg_models_title = t("web.cfg_models_title"),
+        cfg_readonly_note = t("web.cfg_readonly_note"),
+        cfg_models_toggle = t("web.cfg_models_toggle"),
         cfg_save = t("web.cfg_save"),
         cfg_saved = t("web.cfg_saved"),
         cfg_error = t("web.cfg_error"),
+        cfg_group_count = t("web.cfg_group_count"),
+        cards_html = cards_html,
     )
     .replace("FIELDS_JSON", &{
         let keys: Vec<String> = config_schema::fields()
@@ -1212,8 +1557,12 @@ fn html_escape(s: &str) -> String {
 mod tests {
     use super::build_api_json;
     use super::build_dashboard_html;
+    use super::model_pricing_configured;
     use super::pct_change;
     use super::query_param;
+    use super::session_data_by_id;
+    use super::session_data_from_record;
+    use super::session_data_from_window;
     use super::session_detail_json;
     use super::sessions_list_json;
     use super::totals_json;
@@ -1223,7 +1572,9 @@ mod tests {
     use super::ttl_fresh;
     use super::week_compare_json;
     use crate::core::config::AppConfig;
+    use crate::core::history::SessionRecord;
     use crate::core::session::SessionData;
+    use crate::core::transcript::{TokenTotal, TranscriptSummary};
     use crate::core::theme::Theme;
     use crate::core::widget::Widget;
     use crate::core::widget::WidgetConfig;
@@ -1233,6 +1584,32 @@ mod tests {
     use serde_json::{Value, json};
     use std::time::{Duration, Instant};
 
+    /// v0.7 内置注册表后：内置模型（deepseek-v4-flash 等）未手写 [pricing]
+    /// 不算"未配置单价"；未知模型才算。曾只查 [pricing] 导致内置模型误报
+    /// 页面警告"当前模型未配置单价"。
+    #[test]
+    fn pricing_configured_includes_builtin_registry() {
+        let cfg = AppConfig::default();
+        assert!(model_pricing_configured(&cfg, "deepseek-v4-flash"), "内置模型有价");
+        assert!(model_pricing_configured(&cfg, "claude-sonnet-4-6"), "内置 claude 有价");
+        assert!(!model_pricing_configured(&cfg, "no-such-model-xyz"), "未知模型无价");
+        let cfg2: AppConfig =
+            toml::from_str("[pricing]\ncustom-x = { input = 1.0, output = 2.0 }\n").unwrap();
+        assert!(model_pricing_configured(&cfg2, "custom-x"), "用户 [pricing] 覆盖生效");
+    }
+
+    /// 前端无数据占位判定需要 token 总量（cost=0 && in+out=0 → 「—」，
+    /// 与桌面 dashboard 诚实降级同口径）。
+    #[test]
+    fn api_json_includes_token_totals() {
+        let cfg = AppConfig::default();
+        let registry = WidgetRegistry::new();
+        let out = build_api_json(&registry, &cfg, &Theme::default(), None, None);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v["total_input_tokens"].is_number(), "missing in tokens: {}", out);
+        assert!(v["total_output_tokens"].is_number(), "missing out tokens: {}", out);
+    }
+
     /// v0.7 币种透传：zh 配置 → currency_symbol 为 ¥。
     #[test]
     fn api_json_includes_currency_symbol() {
@@ -1240,8 +1617,178 @@ mod tests {
         cfg.language = "zh".into();
         let registry = WidgetRegistry::new();
         let theme = Theme::default();
-        let out = build_api_json(&registry, &cfg, &theme);
+        let out = build_api_json(&registry, &cfg, &theme, None, None);
         assert!(out.contains("\"currency_symbol\":\"¥\""), "zh → ¥: {}", out);
+    }
+
+    /// 卡片标题 i18n（zh）：widgets[].name 必须翻译（"上下文栏" 而非 "Context Bar"），
+    /// 与 draw_tabbed / widget list 的 tr_dyn 口径一致。
+    #[test]
+    fn api_json_widget_names_translated_for_zh() {
+        let cfg: AppConfig = toml::from_str(
+            "language = \"zh\"\ncompact_layout = [\"model_display\", \"context_bar\", \"agent_overview\", \"cost_display\", \"skills_mcp\", \"token_rate\", \"alerts\"]\n",
+        )
+        .unwrap();
+        let mut registry = WidgetRegistry::new();
+        crate::widgets::register_all(&mut registry, &cfg);
+        let out = build_api_json(&registry, &cfg, &Theme::default(), None, None);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let widgets = v["widgets"].as_array().expect("widgets array");
+        assert!(!widgets.is_empty(), "default layout has widgets");
+        for w in widgets {
+            let id = w["id"].as_str().unwrap();
+            let name = w["name"].as_str().unwrap();
+            assert_ne!(
+                name, id,
+                "widget '{}' name not translated (fell back to id)",
+                id
+            );
+        }
+        let names: Vec<&str> = widgets.iter().map(|w| w["name"].as_str().unwrap()).collect();
+        assert!(
+            names.iter().any(|n| *n == "上下文栏"),
+            "context_bar translated: {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| *n == "代理总览"),
+            "agent_overview translated: {:?}",
+            names
+        );
+    }
+
+    /// 卡片标题 i18n（en）：保持 display_name 原样（en 键存在时值与 display_name 一致）。
+    #[test]
+    fn api_json_widget_names_english_by_default() {
+        let mut registry = WidgetRegistry::new();
+        crate::widgets::register_all(&mut registry, &AppConfig::default());
+        let out = build_api_json(&registry, &AppConfig::default(), &Theme::default(), None, None);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        for w in v["widgets"].as_array().unwrap() {
+            assert_eq!(
+                w["name"].as_str().unwrap(),
+                registry.get(w["id"].as_str().unwrap()).unwrap().display_name(),
+                "en name = display_name"
+            );
+        }
+    }
+
+    /// ㉒ 历史会话数据：total_tokens ÷ [models] 窗口 = 估算 pct（30%）。
+    #[test]
+    fn session_data_from_record_pct_from_tokens_over_window() {
+        let cfg: AppConfig = toml::from_str(
+            "[models]\nm = { context_window = 200000 }\n",
+        )
+        .unwrap();
+        let record = SessionRecord {
+            id: 7,
+            started_at: "2026-08-05T10:00:00".into(),
+            duration_secs: 120,
+            total_cost_usd: 0.55,
+            total_tokens: 60_000,
+            agent_count: 2,
+            model: "m".into(),
+            transcript_path: None,
+        };
+        let data = session_data_from_record(&record, None, &cfg);
+        assert!((data.context_window.used_percentage - 30.0).abs() < 1e-9, "30%: {}", data.context_window.used_percentage);
+        assert_eq!(data.context_window.context_window_size, 200_000);
+        assert_eq!(data.context_window.total_input_tokens, 60_000, "无 transcript → in=total");
+        assert_eq!(data.context_window.total_output_tokens, 0);
+        assert_eq!(data.cost.total_duration_ms, 120_000, "secs→ms");
+        assert_eq!(data.model.id, "m");
+        assert_eq!(data.model.display_name, "m", "历史会话 display=id");
+    }
+
+    /// ㉒ transcript 细分 in/out 优先（有 transcript 时）。
+    #[test]
+    fn session_data_from_record_transcript_splits_in_out() {
+        let cfg: AppConfig = toml::from_str(
+            "[models]\nm = { context_window = 200000 }\n",
+        )
+        .unwrap();
+        let record = SessionRecord {
+            id: 1,
+            started_at: "2026-08-05T10:00:00".into(),
+            duration_secs: 60,
+            total_cost_usd: 0.1,
+            total_tokens: 999_999, // 故意与 transcript 不一致，验证 transcript 优先
+            agent_count: 1,
+            model: "m".into(),
+            transcript_path: None,
+        };
+        let summary = TranscriptSummary {
+            total_tokens: TokenTotal { input: 40_000, output: 20_000, ..Default::default() },
+            ..Default::default()
+        };
+        let data = session_data_from_record(&record, Some(&summary), &cfg);
+        assert_eq!(data.context_window.total_input_tokens, 40_000);
+        assert_eq!(data.context_window.total_output_tokens, 20_000);
+        assert!((data.context_window.used_percentage - 30.0).abs() < 1e-9, "30%: {}", data.context_window.used_percentage);
+    }
+
+    /// ㉒ 窗口未知 → pct 0（前端显示 —，不产生虚假百分比）；超窗口钳制 100。
+    #[test]
+    fn session_data_from_record_window_unknown_or_clamped() {
+        let cfg = AppConfig::default(); // 无 [models] 窗口 → 0
+        let record = SessionRecord {
+            id: 2,
+            started_at: "2026-08-05T10:00:00".into(),
+            duration_secs: 60,
+            total_cost_usd: 0.1,
+            total_tokens: 50_000,
+            agent_count: 1,
+            model: "no-such-model".into(),
+            transcript_path: None,
+        };
+        let data = session_data_from_record(&record, None, &cfg);
+        assert_eq!(data.context_window.used_percentage, 0.0, "unknown window → 0");
+        assert_eq!(data.context_window.context_window_size, 0);
+
+        let cfg2: AppConfig = toml::from_str("[models]\nm = { context_window = 10000 }\n").unwrap();
+        let mut rec2 = record.clone();
+        rec2.model = "m".into();
+        rec2.total_tokens = 50_000; // 5× 窗口
+        let data2 = session_data_from_record(&rec2, None, &cfg2);
+        assert_eq!(data2.context_window.used_percentage, 100.0, "clamped to 100");
+    }
+
+    /// ㉒ 响应带 session_id（live=null）；session_data_by_id 未找到 → 空数据。
+    #[test]
+    fn api_json_includes_session_id_field() {
+        let registry = WidgetRegistry::new();
+        let out = build_api_json(&registry, &AppConfig::default(), &Theme::default(), None, None);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v["session_id"].is_null(), "live view session_id null: {}", out);
+        let data = session_data_by_id(999_999, &AppConfig::default());
+        assert!(data.is_none(), "unknown id → none");
+    }
+
+    /// ㉒ 前端：header 会话下拉（默认「当前会话」）+ 估算标注挂点。
+    #[test]
+    fn dashboard_html_has_session_selector() {
+        let cfg_zh: AppConfig = toml::from_str("language = \"zh\"\n").unwrap();
+        let html_zh = build_dashboard_html(&WidgetRegistry::new(), &cfg_zh, &Theme::default());
+        assert!(html_zh.contains("session-select"), "selector present");
+        assert!(html_zh.contains("当前会话"), "zh default option");
+        assert!(html_zh.contains("估算"), "zh estimate tag");
+        let html_en = build_dashboard_html(
+            &WidgetRegistry::new(),
+            &AppConfig::default(),
+            &Theme::default(),
+        );
+        assert!(html_en.contains("Current session"), "en default option");
+        assert!(html_en.contains("est."), "en estimate tag");
+    }
+
+    /// 空输出占位：前端卡片 body 用 w.output || '—'（无数据 widget 显示 —）。
+    #[test]
+    fn dashboard_html_widget_empty_placeholder() {
+        let html = build_dashboard_html(&WidgetRegistry::new(), &AppConfig::default(), &Theme::default());
+        assert!(
+            html.contains("textContent = w.output || '—'"),
+            "html must render dash for empty widget output"
+        );
     }
 
     /// Widget 输出含 ANSI 色码与 \r/\t/引号/反斜杠（compact 输出的真实形态）。
@@ -1278,7 +1825,7 @@ mod tests {
         registry.register(Box::new(NastyWidget));
         let cfg: AppConfig = toml::from_str("compact_layout = [\"nasty\"]\n").unwrap();
 
-        let json = build_api_json(&registry, &cfg, &Theme::default());
+        let json = build_api_json(&registry, &cfg, &Theme::default(), None, None);
         let value: serde_json::Value =
             serde_json::from_str(&json).expect("api/data must be valid JSON");
         let out = value["widgets"][0]["output"]
@@ -1316,6 +1863,8 @@ mod tests {
         // 标记全部被替换（无残留 {web_）
         assert!(!html_en.contains("{web_"));
         assert!(!html_zh.contains("{web_"));
+        // 分页按钮必须绑定 click（曾有按钮无事件、列表永远前 10 条的回归）
+        assert!(html_en.contains("addEventListener('click', loadSessions)"));
     }
 
     #[test]
@@ -1330,6 +1879,19 @@ mod tests {
         assert!(svg.contains("<circle"));
         assert!(svg.contains("08-01"));
         assert!(svg.contains("08-02"));
+    }
+
+    /// 数据标注：每个数据点上方必须有数值文本（{:.2}），与日期标签共存。
+    #[test]
+    fn trend_svg_labels_values_above_points() {
+        let days = vec![
+            ("2026-08-01".to_string(), 1.0),
+            ("2026-08-02".to_string(), 3.0),
+        ];
+        let svg = trend_svg(&days).expect("2+ points render");
+        assert!(svg.contains(">1.00<"), "value label 1.0: {}", svg);
+        assert!(svg.contains(">3.00<"), "value label 3.0: {}", svg);
+        assert!(svg.contains(">08-01<"), "date label kept: {}", svg);
     }
 
     #[test]
@@ -1392,18 +1954,60 @@ mod tests {
             used_pct: 42.0,
             tokens_in: 1000,
             tokens_out: 500,
+            cache_read: 0,
+            cache_created: 0,
             cost: 1.25,
             agent_count: 2,
             ts: 0,
             corrupt: false,
+            data_source: "reported".to_string(),
         };
         let v = windows_json(&[w.clone()]);
         assert_eq!(v["windows"][0]["dir"], json!("proj-a"));
         assert_eq!(v["windows"][0]["status"], json!("active"));
         assert_eq!(v["windows"][0]["tokens"], json!(1500));
+        assert_eq!(v["windows"][0]["cache_read"], json!(0));
+        assert_eq!(v["windows"][0]["cache_created"], json!(0));
+        assert_eq!(v["windows"][0]["data_source"], json!("reported"));
         w.corrupt = true;
         let v2 = windows_json(&[w]);
         assert_eq!(v2["windows"][0]["corrupt"], json!(true));
+    }
+
+    #[test]
+    fn session_data_from_window_maps_tokens_and_cost() {
+        let cfg = AppConfig::default();
+        let w = crate::core::windows::WindowInfo {
+            key: "k".to_string(),
+            dir_name: "proj-a".to_string(),
+            status: crate::core::windows::WindowStatus::Active,
+            model: "deepseek-v4-flash".to_string(),
+            used_pct: 1.18,
+            tokens_in: 1000,
+            tokens_out: 500,
+            cache_read: 200,
+            cache_created: 100,
+            cost: 0.0032,
+            agent_count: 1,
+            ts: 0,
+            corrupt: false,
+            data_source: "reported".to_string(),
+        };
+        let d = session_data_from_window(&w, &cfg);
+        assert_eq!(d.model.id, "deepseek-v4-flash");
+        assert_eq!(d.model.display_name, "deepseek-v4-flash", "scanner 窗口 display = id");
+        assert_eq!(d.context_window.total_input_tokens, 1000);
+        assert_eq!(d.context_window.total_output_tokens, 500);
+        assert_eq!(d.context_window.current_usage.cache_read_input_tokens, 200);
+        assert_eq!(d.context_window.current_usage.cache_creation_input_tokens, 100);
+        assert_eq!(d.cost.total_cost_usd, 0.0032);
+        // 内置 deepseek 1M 窗口 → pct = 1500/1e6*100 = 0.15
+        assert!((d.context_window.used_percentage - 0.15).abs() < 1e-9);
+        assert_eq!(d.context_window.context_window_size, 1_000_000);
+        assert_eq!(
+            d.data_source,
+            crate::core::data_source::DataSource::Reported
+        );
     }
 
     #[test]

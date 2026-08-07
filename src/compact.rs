@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::alert;
 use crate::core::ansi;
@@ -70,15 +70,18 @@ pub fn lines_from_layers(runtime: Option<u8>, mod_lines: Option<u8>, theme: u8) 
 }
 
 /// 当前生效的 compact widget 数组（mod 灌入优先，fallback config）。
+/// 主题预设 mod（无 layout/compact_widgets）不改变布局，回退 config。
 pub fn resolve_compact_layout(config: &AppConfig, active: bool) -> Result<Vec<String>, String> {
     if !config.active_mod.is_empty() {
         if let Ok(pkg) = AppConfig::load_mod(&config.active_mod) {
-            return layout_from_mod(
-                pkg.compact_widgets.as_ref(),
-                pkg.layout.as_ref().map(|l| l.compact.as_str()).unwrap_or(""),
-                config.language(),
-                active,
-            );
+            if pkg.layout.is_some() || pkg.compact_widgets.is_some() {
+                return layout_from_mod(
+                    pkg.compact_widgets.as_ref(),
+                    pkg.layout.as_ref().map(|l| l.compact.as_str()).unwrap_or(""),
+                    config.language(),
+                    active,
+                );
+            }
         }
     }
     Ok(config.compact_layout.clone())
@@ -102,11 +105,48 @@ pub fn render(
     theme: &Theme,
 ) -> Result<String, String> {
     let stdin_data = read_stdin()?;
-    let mut data = SessionData::from_stdin_json(&stdin_data)
+    render_from_json(&stdin_data, registry, config, theme)
+}
+
+/// 数据源解析后的完整渲染管线（render 的纯函数化入口，可单元测试）。
+pub fn render_from_json(
+    json: &str,
+    registry: &WidgetRegistry,
+    config: &AppConfig,
+    theme: &Theme,
+) -> Result<String, String> {
+    let mut data = SessionData::from_stdin_json(json)
         .map_err(|e| format!("parse stdin JSON: {}", e))?;
+    apply_data_source(&mut data);
     // v0.7 窗口单点解析：真实窗口覆盖 200k 兜底（重算 pct，一次生效全线消费点）
     pricing::resolve_context_window(&mut data, config);
-    run_pipeline(&data, registry, config, theme)
+    let output = run_pipeline(&data, registry, config, theme)?;
+    Ok(annotate_fallback(output, theme, data.data_source.is_fallback()))
+}
+
+/// 单点解析：stale/缺失的报告路径 → 同项目活跃兄弟文件，全链路用解析结果。
+pub fn apply_data_source(data: &mut SessionData) {
+    let Some(reported) = data.transcript_path.as_deref() else {
+        return;
+    };
+    if reported.is_empty() {
+        return;
+    }
+    let (resolved, source) =
+        crate::core::data_source::resolve_transcript_path(Path::new(reported));
+    // read_dir 返回原生分隔符（Windows `\`），stdin 与 should_restore/window_key
+    // 比较用 `/` → 统一归一化为前斜杠，避免跨 render 的格式翻转
+    data.transcript_path = Some(resolved.to_string_lossy().replace('\\', "/"));
+    data.data_source = source;
+}
+
+/// fallback 标注：dim 色 " ~" 追加在渲染输出末尾（唯一后处理点，任意布局生效）。
+pub fn annotate_fallback(output: String, theme: &Theme, fallback: bool) -> String {
+    if fallback && !output.is_empty() {
+        format!("{}{}", output, ansi::ansi_fg(" ~", &theme.muted))
+    } else {
+        output
+    }
 }
 
 /// The 5s render pipeline: restore state → transcript → git/scripts →
@@ -538,6 +578,22 @@ mod tests {
     }
 
     #[test]
+    fn resolve_layout_falls_back_for_theme_preset_mod() {
+        let mut cfg = AppConfig::default();
+        cfg.active_mod = "dracula".to_string();
+        let got = resolve_compact_layout(&cfg, false).unwrap();
+        assert_eq!(got, cfg.compact_layout, "主题预设 mod 不改变布局");
+    }
+
+    #[test]
+    fn resolve_layout_uses_layout_mod() {
+        let mut cfg = AppConfig::default();
+        cfg.active_mod = "noir-precision".to_string();
+        let got = resolve_compact_layout(&cfg, false).unwrap();
+        assert_ne!(got, cfg.compact_layout, "出厂 mod 布局生效");
+    }
+
+    #[test]
     fn layout_from_mod_widgets_win() {
         let widgets = vec!["model_display".to_string(), "cost_display".to_string()];
         let got = layout_from_mod(Some(&widgets), "minimal", Language::En, false).unwrap();
@@ -608,5 +664,97 @@ mod tests {
         assert_eq!(lines_from_layers(Some(3), Some(2), 1), 3);
         assert_eq!(lines_from_layers(None, Some(2), 1), 2);
         assert_eq!(lines_from_layers(None, None, 1), 1);
+    }
+
+    /// CLAUDE_HUD_DIR 共享锁（定义于 config.rs）：env 是进程全局，所有
+    /// 读写该 env 的测试（compact 管道 + config 路径）必须串行。
+    /// 持锁期间 panic 会毒化锁 → 用 into_inner 恢复（失败信息仍可见）。
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::core::config::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn hud_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("hud-ds-pipe-{}-{}", std::process::id(), name))
+    }
+
+    fn register_standard(cfg: &AppConfig) -> WidgetRegistry {
+        let mut registry = WidgetRegistry::new();
+        crate::widgets::register_all(&mut registry, cfg);
+        registry
+    }
+
+    #[test]
+    fn render_falls_back_and_annotates_when_reported_path_missing() {
+        let _g = env_lock();
+        let hud = hud_dir("fb");
+        let _ = std::fs::remove_dir_all(&hud);
+        let proj = hud.join("projects").join("D--workspace-proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        // 活跃兄弟文件（回退目标）；报告路径 stale.jsonl 不存在
+        let active = proj.join("active.jsonl");
+        std::fs::write(
+            &active,
+            "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":20},\"model\":\"deepseek-v4-flash\"},\"timestamp\":\"2026-07-31T10:01:00Z\"}\n",
+        )
+        .unwrap();
+        std::env::set_var("CLAUDE_HUD_DIR", &hud);
+
+        let active_path = active.to_string_lossy().replace('\\', "/");
+        let stdin = format!(
+            r#"{{"model":{{"id":"deepseek-v4-flash","display_name":"m"}},"context_window":{{"used_percentage":1,"total_input_tokens":10,"context_window_size":1000000}},"cost":{{"total_cost_usd":0.1,"total_duration_ms":1}},"transcript_path":"{}/projects/D--workspace-proj/stale.jsonl"}}"#,
+            hud.to_string_lossy().replace('\\', "/")
+        );
+        let cfg: AppConfig =
+            toml::from_str("compact_layout = [\"model_display\", \"cost_display\"]\n").unwrap();
+        let registry = register_standard(&cfg);
+        let out = render_from_json(&stdin, &registry, &cfg, &Theme::default()).unwrap();
+        assert!(
+            ansi::strip_ansi(&out).ends_with(" ~"),
+            "fallback 标注缺失: {}",
+            out
+        );
+        // 全链路用解析后路径：快照 transcript_path = 回退目标
+        let st = StateFile::read(&AppConfig::state_path().unwrap());
+        assert_eq!(
+            st.snapshot.transcript_path.as_deref(),
+            Some(active_path.as_str()),
+            "快照写入解析后路径"
+        );
+        let _ = std::fs::remove_dir_all(&hud);
+        std::env::remove_var("CLAUDE_HUD_DIR");
+    }
+
+    #[test]
+    fn render_reported_path_no_annotation() {
+        let _g = env_lock();
+        let hud = hud_dir("rep");
+        let _ = std::fs::remove_dir_all(&hud);
+        let proj = hud.join("projects").join("D--workspace-proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let reported = proj.join("s.jsonl");
+        std::fs::write(
+            &reported,
+            "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":20},\"model\":\"deepseek-v4-flash\"},\"timestamp\":\"2026-07-31T10:01:00Z\"}\n",
+        )
+        .unwrap();
+        std::env::set_var("CLAUDE_HUD_DIR", &hud);
+
+        let stdin = format!(
+            r#"{{"model":{{"id":"deepseek-v4-flash","display_name":"m"}},"context_window":{{"used_percentage":1,"total_input_tokens":10,"context_window_size":1000000}},"cost":{{"total_cost_usd":0.1,"total_duration_ms":1}},"transcript_path":"{}"}}"#,
+            reported.to_string_lossy().replace('\\', "/")
+        );
+        let cfg: AppConfig =
+            toml::from_str("compact_layout = [\"model_display\", \"cost_display\"]\n").unwrap();
+        let registry = register_standard(&cfg);
+        let out = render_from_json(&stdin, &registry, &cfg, &Theme::default()).unwrap();
+        assert!(
+            !ansi::strip_ansi(&out).contains(" ~"),
+            "reported 路径不应有标注: {}",
+            out
+        );
+        let _ = std::fs::remove_dir_all(&hud);
+        std::env::remove_var("CLAUDE_HUD_DIR");
     }
 }

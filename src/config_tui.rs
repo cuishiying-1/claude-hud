@@ -96,6 +96,9 @@ fn run_loop(
             .map_err(|e| format!("poll: {}", e))?
         {
             if let Event::Key(key) = event::read().map_err(|e| format!("read: {}", e))? {
+                if !crate::dashboard::is_press(&key) {
+                    continue; // Windows Release 事件：忽略，防按键双触发
+                }
                 match handle_key(key.code, &mut state, registry, config, lang) {
                     KeyAction::Quit | KeyAction::QuitForce => return Ok(()),
                     KeyAction::Save => {

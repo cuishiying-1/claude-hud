@@ -11,16 +11,20 @@ use ratatui::{
 
 use crate::core::{
     config::AppConfig,
-    state,
     theme::Theme,
-    windows::{self, WindowInfo, WindowStatus},
+    windows::{WindowInfo, WindowStatus},
 };
 use crate::core::i18n::{tr, Language};
 
-/// 渲染多窗口列表(全屏区域)。
-pub fn draw(frame: &mut Frame, area: Rect, theme: &Theme, config: &AppConfig) {
+/// 渲染多窗口列表(全屏区域)。wins 由调用方（dashboard/serve）扫描传入。
+pub fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    config: &AppConfig,
+    wins: &[WindowInfo],
+) {
     let lang = config.language();
-    let wins = windows::scan_windows(state::now_secs());
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(crate::core::ansi::parse_ratatui_color(
@@ -102,7 +106,7 @@ pub fn format_row(w: &WindowInfo, symbol: &str, lang: Language) -> Vec<String> {
     } else {
         w.dir_name.clone()
     };
-    vec![
+    let mut cells = vec![
         status,
         name,
         w.model.clone(),
@@ -110,7 +114,12 @@ pub fn format_row(w: &WindowInfo, symbol: &str, lang: Language) -> Vec<String> {
         format!("{}{:.2}", symbol, w.cost),
         format!("{:.1}k", (w.tokens_in + w.tokens_out) as f64 / 1000.0),
         w.agent_count.to_string(),
-    ]
+    ];
+    // stale 自动回退的窗口：目录列追加 " ~"（紧凑管线同款标注）
+    if w.data_source == "fallback" {
+        cells[1] = format!("{} ~", cells[1]);
+    }
+    cells
 }
 
 fn window_style(w: &WindowInfo, theme: &Theme) -> Style {
@@ -135,10 +144,13 @@ mod tests {
             used_pct: 42.0,
             tokens_in: 1000,
             tokens_out: 500,
+            cache_read: 0,
+            cache_created: 0,
             cost: 1.25,
             agent_count: 2,
             ts: 0,
             corrupt: false,
+            data_source: "reported".to_string(),
         }
     }
 
@@ -162,5 +174,19 @@ mod tests {
         let row = format_row(&w, "$", Language::En);
         assert_eq!(row[0], "ended");
         assert_eq!(row[1], "corrupt");
+    }
+
+    #[test]
+    fn format_row_marks_fallback_source() {
+        let mut w = win(WindowStatus::Active);
+        w.data_source = "fallback".to_string();
+        let row = format_row(&w, "$", Language::En);
+        assert_eq!(row[1], "proj-a ~", "fallback 窗口目录列带 ~ 标注");
+    }
+
+    #[test]
+    fn format_row_reported_no_marker() {
+        let row = format_row(&win(WindowStatus::Active), "$", Language::En);
+        assert_eq!(row[1], "proj-a");
     }
 }

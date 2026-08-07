@@ -8,6 +8,12 @@ use super::theme::apply_theme_keys;
 use super::widget::WidgetConfig;
 use crate::core::i18n::Language;
 
+/// CLAUDE_HUD_DIR 测试专用全局锁：env 是进程全局，所有读写该 env 的
+/// 单元测试必须串行（compact 管道测试与 config 路径测试共用，防并行
+/// 踩踏读到对方的临时目录）。
+#[cfg(test)]
+pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Top-level configuration loaded from config.toml.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
@@ -278,9 +284,48 @@ impl AppConfig {
             "matrix-surveillance" => include_str!("../presets/matrix-surveillance.toml"),
             "noir-precision" => include_str!("../presets/noir-precision.toml"),
             "noir-tabbed" => include_str!("../presets/noir-tabbed.toml"),
-            _ => return None,
+            _ => return Self::theme_preset_mod(name),
         };
         toml::from_str(data).ok()
+    }
+
+    /// 主题预设作为轻量内置 mod（仅主题、无布局/动画）。
+    /// mod list 与配置编辑器的 active_mod 选项都把它们列为可选 mod，
+    /// 但此前 load_mod 只认 6 个出厂包 → `mod preview dracula` 报 not found、
+    /// active_mod=dracula 静默无效。合成包补上这条路径。
+    fn theme_preset_mod(name: &str) -> Option<ModPackage> {
+        if !Theme::preset_names().contains(&name) {
+            return None;
+        }
+        Some(ModPackage {
+            mod_info: ModInfo {
+                name: name.to_string(),
+                version: String::new(),
+                description: "Built-in theme preset".to_string(),
+                scene: String::new(),
+            },
+            layout: None,
+            compact_widgets: None,
+            theme: Some(ModTheme {
+                preset: name.to_string(),
+                overrides: None,
+            }),
+            animation: None,
+            widgets: HashMap::new(),
+        })
+    }
+
+    /// HUD 数据目录（config/state/mods/windows/history.db 共根）。
+    /// CLAUDE_HUD_DIR 优先：黑盒测试注入隔离目录，避免与用户真实 render
+    /// 进程（5s 节奏并发写同一目录）互相污染（与 CLAUDE_HUD_CONFIG /
+    /// CLAUDE_HUD_PHASE 的 env 注入先例一致）。
+    pub fn hud_dir() -> Result<PathBuf, String> {
+        if let Ok(p) = std::env::var("CLAUDE_HUD_DIR") {
+            return Ok(PathBuf::from(p));
+        }
+        let base = dirs::home_dir()
+            .ok_or_else(|| "cannot find home directory".to_string())?;
+        Ok(base.join(".claude").join("plugins").join("claude-hud"))
     }
 
     pub fn config_path() -> Result<PathBuf, String> {
@@ -289,28 +334,20 @@ impl AppConfig {
         if let Ok(p) = std::env::var("CLAUDE_HUD_CONFIG") {
             return Ok(PathBuf::from(p));
         }
-        let base = dirs::home_dir()
-            .ok_or_else(|| "cannot find home directory".to_string())?;
-        Ok(base.join(".claude").join("plugins").join("claude-hud").join("config.toml"))
+        Ok(Self::hud_dir()?.join("config.toml"))
     }
 
     pub fn mods_dir() -> Result<PathBuf, String> {
-        let base = dirs::home_dir()
-            .ok_or_else(|| "cannot find home directory".to_string())?;
-        Ok(base.join(".claude").join("plugins").join("claude-hud").join("mods"))
+        Ok(Self::hud_dir()?.join("mods"))
     }
 
     pub fn state_path() -> Result<PathBuf, String> {
-        let base = dirs::home_dir()
-            .ok_or_else(|| "cannot find home directory".to_string())?;
-        Ok(base.join(".claude").join("plugins").join("claude-hud").join("state.json"))
+        Ok(Self::hud_dir()?.join("state.json"))
     }
 
     /// 多窗口实时快照目录:每窗口一个 <key>.json(key = transcript_path 哈希)。
     pub fn windows_dir() -> Result<PathBuf, String> {
-        let base = dirs::home_dir()
-            .ok_or_else(|| "cannot find home directory".to_string())?;
-        Ok(base.join(".claude").join("plugins").join("claude-hud").join("windows"))
+        Ok(Self::hud_dir()?.join("windows"))
     }
 
     /// Build WidgetConfig for a given widget id from the config.
@@ -583,6 +620,28 @@ mod tests {
     }
 
     #[test]
+    fn load_mod_theme_preset_succeeds() {
+        let pkg = AppConfig::load_mod("dracula").unwrap();
+        assert_eq!(pkg.mod_info.name, "dracula");
+        assert_eq!(pkg.theme.as_ref().unwrap().preset, "dracula");
+        assert!(pkg.layout.is_none(), "主题预设 mod 无布局");
+        assert!(pkg.animation.is_none());
+    }
+
+    #[test]
+    fn load_mod_rejects_unknown_name() {
+        assert!(AppConfig::load_mod("no-such-mod").is_err());
+    }
+
+    #[test]
+    fn resolve_theme_uses_theme_preset_as_mod() {
+        let cfg: AppConfig = toml::from_str("active_mod = \"dracula\"\n").unwrap();
+        let r = cfg.resolve_theme();
+        assert_eq!(r.preset.as_deref(), Some("dracula"));
+        assert_eq!(r.theme.bg, "#282a36");
+    }
+
+    #[test]
     fn resolve_theme_string_preset_without_mod() {
         let cfg: AppConfig = toml::from_str(
             "active_mod = \"\"\ntheme = \"dracula\"\n",
@@ -625,7 +684,26 @@ mod tests {
     }
 
     #[test]
+    fn hud_dir_env_override_redirects_all_paths() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join("hud-isolated-test");
+        std::env::set_var("CLAUDE_HUD_DIR", &tmp);
+        assert_eq!(AppConfig::hud_dir().unwrap(), tmp);
+        assert_eq!(AppConfig::state_path().unwrap(), tmp.join("state.json"));
+        assert_eq!(AppConfig::mods_dir().unwrap(), tmp.join("mods"));
+        assert_eq!(AppConfig::windows_dir().unwrap(), tmp.join("windows"));
+        // config_path 仍先走 CLAUDE_HUD_CONFIG（P10 注入先例）——未设置时
+        // 回退 hud_dir 根。
+        std::env::remove_var("CLAUDE_HUD_CONFIG");
+        assert_eq!(AppConfig::config_path().unwrap(), tmp.join("config.toml"));
+        std::env::remove_var("CLAUDE_HUD_DIR");
+        let p = AppConfig::state_path().unwrap();
+        assert_ne!(p, tmp.join("state.json"));
+    }
+
+    #[test]
     fn windows_dir_under_hud_dir() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = AppConfig::windows_dir().unwrap();
         let s = dir.to_string_lossy().to_string();
         assert!(

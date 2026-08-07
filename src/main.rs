@@ -1,6 +1,8 @@
 mod compact;
 mod config_tui;
 mod core;
+mod mod_preview_tui;
+mod totals_render;
 mod dashboard;
 mod doctor;
 mod notify;
@@ -19,6 +21,7 @@ use core::theme::{BorderStyle, IconSet, Theme};
 use core::state::{StateFile, now_secs, write_atomic};
 use core::widget::WidgetRegistry;
 use std::collections::HashMap;
+use std::io::IsTerminal;
 
 #[derive(Parser)]
 #[command(name = "claude-hud", version)]
@@ -86,7 +89,11 @@ enum Commands {
         id: String,
     },
     /// All-session totals + active windows (multi-session monitor)
-    Totals,
+    Totals {
+        /// Expand ended sessions (totals --all)
+        #[arg(long)]
+        all: bool,
+    },
     /// Interactive config editor (keyboard form)
     Config,
     /// Upgrade checks
@@ -110,9 +117,9 @@ enum ModCommands {
     Use {
         name: String,
     },
-    /// Preview a mod without switching
+    /// Preview a mod (no name: interactive browse with ↑/↓, Enter to switch)
     Preview {
-        name: String,
+        name: Option<String>,
     },
     /// Show current active mod
     Current,
@@ -251,7 +258,7 @@ fn main() {
             run_sessions(&config, limit, offset, date.as_deref(), lang)
         }
         Commands::Session { id } => run_session(&config, &id, lang),
-        Commands::Totals => run_totals(&config, lang),
+        Commands::Totals { all } => run_totals(&config, lang, all),
         Commands::Config => config_tui::run(&registry, &config),
         Commands::Update { cmd } => match cmd {
             UpdateCommands::Check => {
@@ -330,7 +337,10 @@ fn inject_help(cmd: clap::Command, lang: crate::core::i18n::Language) -> clap::C
             c.about(tr(lang, "cli.session"))
                 .mut_arg("id", |a| a.help(tr(lang, "cli.session_id")))
         })
-        .mut_subcommand("totals", |c| c.about(tr(lang, "cli.totals")))
+        .mut_subcommand("totals", |c| {
+            c.about(tr(lang, "cli.totals"))
+                .mut_arg("all", |a| a.help(tr(lang, "cli.totals_all")))
+        })
         .mut_subcommand("config", |c| c.about(tr(lang, "cli.config")))
         .mut_subcommand("update", |c| {
             c.about(tr(lang, "cli.update"))
@@ -447,7 +457,7 @@ fn run_uninstall(lang: crate::core::i18n::Language) -> Result<(), String> {
             Err(e) => eprintln!("warning: skip settings.json cleanup ({})", e),
         }
     }
-    let config_dir = home.join(".claude").join("plugins").join("claude-hud");
+    let config_dir = AppConfig::hud_dir()?;
     if config_dir.exists() {
         std::fs::remove_dir_all(&config_dir)
             .map_err(|e| format!("remove config dir: {}", e))?;
@@ -530,36 +540,8 @@ fn handle_mod(
             );
         }
         ModCommands::Preview { name } => {
-            let mod_pkg = AppConfig::load_mod(&name)?;
-            println!(
-                "{}",
-                tr(lang, "runtime.mod_preview").replace("{name}", &mod_pkg.mod_info.name)
-            );
-            println!(
-                "{}",
-                tr(lang, "runtime.mod_scene").replace("{scene}", &mod_pkg.mod_info.scene)
-            );
-            if let Some(layout) = &mod_pkg.layout {
-                println!(
-                    "{}",
-                    tr(lang, "runtime.mod_layout_line")
-                        .replace("{compact}", &layout.compact)
-                        .replace("{dashboard}", &layout.dashboard)
-                );
-            }
-            if let Some(theme) = &mod_pkg.theme {
-                println!(
-                    "{}",
-                    tr(lang, "runtime.mod_theme").replace("{theme}", &theme.preset)
-                );
-            }
-            if let Some(anim) = &mod_pkg.animation {
-                println!(
-                    "{}",
-                    tr(lang, "runtime.mod_animation_line")
-                        .replace("{enabled}", &anim.enabled.to_string())
-                        .replace("{effects}", &format!("{:?}", anim.effects))
-                );
+            if let Err(e) = run_preview(name, config, lang) {
+                return Err(e);
             }
         }
         ModCommands::Current => {
@@ -711,23 +693,7 @@ fn handle_mod(
             println!("{}", tr(lang, "runtime.mod_reset"));
         }
         ModCommands::Pick => {
-            let mut items: Vec<String> = Vec::new();
-            for name in BUILTIN_MODS {
-                if AppConfig::load_mod(name).is_ok() {
-                    items.push(name.to_string());
-                }
-            }
-            let mods_dir = AppConfig::mods_dir()?;
-            if mods_dir.exists() {
-                if let Ok(entries) = std::fs::read_dir(&mods_dir) {
-                    for entry in entries.filter_map(|e| e.ok()) {
-                        let fname = entry.file_name().to_string_lossy().to_string();
-                        if let Some(name) = fname.strip_suffix(".toml") {
-                            items.push(name.to_string());
-                        }
-                    }
-                }
-            }
+            let items = mod_preview_tui::candidates();
             if items.is_empty() {
                 return Err(tr(lang, "runtime.mod_none").to_string());
             }
@@ -772,8 +738,8 @@ fn handle_mod(
     Ok(())
 }
 
-/// 内置 6 个 mod 的出厂顺序（find_mod_by_scene 与 mod pick 共用）。
-const BUILTIN_MODS: [&str; 6] = [
+/// 内置 6 个 mod 的出厂顺序（find_mod_by_scene / mod pick / mod preview 共用）。
+pub(crate) const BUILTIN_MODS: [&str; 6] = [
     "glacier-workstation",
     "obsidian-command",
     "ember-night",
@@ -819,6 +785,74 @@ fn find_mod_by_scene(
         }
     }
     Err(tr(lang, "runtime.mod_scene_not_found").replace("{name}", scene))
+}
+
+/// `mod preview`：有名字 = 静态元数据 + 主题样例行；无名字 = 交互式浏览
+/// （↑/↓ 预览、Enter 切换、q 退出；非 TTY 回退数字列表）。
+fn run_preview(
+    name: Option<String>,
+    config: &AppConfig,
+    lang: crate::core::i18n::Language,
+) -> Result<(), String> {
+    match name {
+        Some(name) => {
+            let mod_pkg = AppConfig::load_mod(&name)?;
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_preview").replace("{name}", &mod_pkg.mod_info.name)
+            );
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_scene").replace("{scene}", &mod_pkg.mod_info.scene)
+            );
+            if let Some(layout) = &mod_pkg.layout {
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_layout_line")
+                        .replace("{compact}", &layout.compact)
+                        .replace("{dashboard}", &layout.dashboard)
+                );
+            }
+            if let Some(theme) = &mod_pkg.theme {
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_theme").replace("{theme}", &theme.preset)
+                );
+            }
+            if let Some(anim) = &mod_pkg.animation {
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_animation_line")
+                        .replace("{enabled}", &anim.enabled.to_string())
+                        .replace("{effects}", &format!("{:?}", anim.effects))
+                );
+            }
+            let mut probe = config.clone();
+            probe.active_mod = name.clone();
+            let sample = mod_preview_tui::theme_sample(&probe.resolve_theme().theme);
+            println!(
+                "{}",
+                tr(lang, "runtime.mod_preview_sample").replace("{sample}", &sample)
+            );
+            Ok(())
+        }
+        None => {
+            let picked = mod_preview_tui::run(config)?;
+            if let Some(target) = picked {
+                let state_path = AppConfig::state_path()?;
+                let mut st = StateFile::read(&state_path);
+                st.previous_mod = Some(config.active_mod.clone());
+                st.write(&state_path)
+                    .map_err(|e| format!("write state: {}", e))?;
+                write_active_mod(config, &target)?;
+                println!(
+                    "{}",
+                    tr(lang, "runtime.mod_switched").replace("{name}", &target)
+                );
+            }
+            Ok(())
+        }
+    }
 }
 
 /// 校验 + 解析 mod 目标名（@ 场景别名 → 实际 mod 名），失败返回 Err。
@@ -1249,26 +1283,39 @@ fn run_session(
 }
 
 /// 多会话监控 CLI:历史全量总和(COUNT/SUM/AVG)+ 最近 7 天按天 + 活跃窗口
-/// 实时段(实时数据未计入总和,单独列出)。
+/// 实时段(实时数据未计入总和,单独列出)。分段卡片式输出：主题色 +
+/// 对齐列；已结束窗口折叠(--all 展开)；非 TTY 降级纯文本。
 fn run_totals(
     config: &AppConfig,
     lang: crate::core::i18n::Language,
+    all: bool,
 ) -> Result<(), String> {
+    let theme = config.resolve_theme().theme;
+    let color = std::io::stdout().is_terminal();
+    let sym = config.currency().to_string();
+
     let store = HistoryStore::open()?;
     let t = store.totals()?;
-    let symbol = config.currency();
-    println!("{}", tr(lang, "runtime.t_totals_title"));
     println!(
         "{}",
-        tr(lang, "runtime.t_totals_line")
-            .replace("{n}", &t.sessions.to_string())
-            .replace("{sym}", symbol)
-            .replace("{cost}", &format!("{:.2}", t.total_cost))
-            .replace("{tok}", &format_history_tokens(t.total_tokens))
-            .replace("{dur}", &format_history_duration(t.total_duration_secs))
-            .replace("{avg}", &format!("{:.1}", t.avg_duration_min))
+        totals_render::section_title(tr(lang, "runtime.t_totals_title"), &theme, color)
     );
-    println!("{}", tr(lang, "runtime.t_totals_daily_title"));
+    if t.sessions == 0 {
+        println!("  —");
+    } else {
+        println!(
+            "{}",
+            totals_render::totals_line(
+                t.sessions, t.total_cost, t.total_tokens, t.total_duration_secs,
+                t.avg_duration_min, &sym, &theme, lang, color
+            )
+        );
+    }
+
+    println!(
+        "{}",
+        totals_render::section_title(tr(lang, "runtime.t_totals_daily_title"), &theme, color)
+    );
     let daily = store.daily_totals()?;
     if daily.is_empty() {
         println!("  —");
@@ -1276,48 +1323,41 @@ fn run_totals(
         for (day, cost, tokens) in daily {
             println!(
                 "{}",
-                tr(lang, "runtime.t_totals_daily_line")
-                    .replace("{day}", &day)
-                    .replace("{sym}", symbol)
-                    .replace("{cost}", &format!("{:.2}", cost))
-                    .replace("{tok}", &format_history_tokens(tokens))
+                totals_render::daily_line(&day, cost, tokens, &sym, &theme, lang, color)
             );
         }
     }
-    println!("{}", tr(lang, "runtime.t_totals_windows_title"));
+
+    println!(
+        "{}",
+        totals_render::section_title(
+            tr(lang, "runtime.t_totals_windows_title"),
+            &theme,
+            color
+        )
+    );
     let wins = crate::core::windows::scan_windows(crate::core::state::now_secs());
     if wins.is_empty() {
         println!("  —");
-    } else {
+    } else if all {
         for w in &wins {
-            let name = if w.corrupt {
-                tr(lang, "runtime.t_win_corrupt").to_string()
-            } else {
-                w.dir_name.clone()
-            };
-            let status = match &w.status {
-                crate::core::windows::WindowStatus::Active => {
-                    tr(lang, "runtime.t_win_active")
-                }
-                crate::core::windows::WindowStatus::Idle => tr(lang, "runtime.t_win_idle"),
-                crate::core::windows::WindowStatus::Ended => {
-                    tr(lang, "runtime.t_win_ended")
-                }
-            };
             println!(
                 "{}",
-                tr(lang, "runtime.t_totals_window_line")
-                    .replace("{name}", &name)
-                    .replace("{model}", &w.model)
-                    .replace("{pct}", &format!("{:.0}", w.used_pct))
-                    .replace("{sym}", symbol)
-                    .replace("{cost}", &format!("{:.2}", w.cost))
-                    .replace(
-                        "{tok}",
-                        &format_history_tokens(w.tokens_in + w.tokens_out)
-                    )
-                    .replace("{n}", &w.agent_count.to_string())
-                    .replace("{status}", status)
+                totals_render::window_line(w, &sym, &theme, lang, color)
+            );
+        }
+    } else {
+        let (kept, fold) = totals_render::fold_ended(&wins);
+        for w in kept {
+            println!(
+                "{}",
+                totals_render::window_line(w, &sym, &theme, lang, color)
+            );
+        }
+        if let Some(f) = fold {
+            println!(
+                "{}",
+                totals_render::folded_line(&f, &sym, &theme, lang, color)
             );
         }
     }

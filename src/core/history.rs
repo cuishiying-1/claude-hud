@@ -120,12 +120,7 @@ impl HistoryStore {
     }
 
     fn db_path() -> Result<PathBuf, String> {
-        let base = dirs::home_dir().ok_or_else(|| "no home dir".to_string())?;
-        Ok(base
-            .join(".claude")
-            .join("plugins")
-            .join("claude-hud")
-            .join("history.db"))
+        Ok(super::config::AppConfig::hud_dir()?.join("history.db"))
     }
 
     /// Record a session snapshot.
