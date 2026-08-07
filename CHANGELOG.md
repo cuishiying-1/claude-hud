@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.0] - 2026-08-07 (v0.9 配置与 Web 批次)
 
 ### Added — v0.9 Web 配置页重构
 
@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- statusLine 命令写完整 exe 路径（`setup` 用 `current_exe()`，Windows 正斜杠）：本地 stub 模式 bin 目录仅 `.cmd`，bash 无法解析裸名 `.cmd` → 状态栏空白；doctor 状态检查同步放宽
 - 主题预设可作为轻量 mod：`mod preview dracula` / `mod use nord` / `mod pick` 不再报 `mod 'xxx' not found`（`load_mod` 对 10 个主题预设名合成无 layout 的轻量 mod；`active_mod` 设为主题预设时布局回退 `config.compact_layout`，不再上屏 `[hud err]`）
 - 黑盒用例 198 → 212（P11 六例：preview 主题预设 / use 后 current 回读 / use 后 render 布局回退 / preview 交互回退 编号切换 / 越界报错 / EOF 退出不切换）
 

@@ -1,6 +1,6 @@
 [package]
 name = "claude-hud"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 description = "Dual-mode terminal HUD for Claude Code: compact status bar + full-screen TUI dashboard"
 license = "MIT"
