@@ -139,7 +139,9 @@ fn status_line_ok() -> bool {
         Err(_) => return false,
     };
     match root.get("statusLine").and_then(|v| v.get("command")) {
-        Some(serde_json::Value::String(cmd)) => cmd.contains("claude-hud render"),
+        Some(serde_json::Value::String(cmd)) => {
+            cmd.contains("claude-hud") && cmd.contains(" render")
+        }
         _ => false,
     }
 }

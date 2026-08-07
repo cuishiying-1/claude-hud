@@ -418,9 +418,9 @@ fn setup_cc_settings(lang: crate::core::i18n::Language) -> Result<(), String> {
     }
 
     let merged = if valid_json {
-        cc_config::merge_status_line(&original)?
+        cc_config::merge_status_line(&original, &cc_config::default_status_line_command())?
     } else {
-        cc_config::merge_status_line("")?
+        cc_config::merge_status_line("", &cc_config::default_status_line_command())?
     };
     write_atomic(&settings_path, &merged)?;
     println!(

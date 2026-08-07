@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 
 /// Merge the Claude HUD statusLine into Claude Code settings.json content.
 /// Returns the pretty-printed merged JSON. Empty input starts from {}.
-pub fn merge_status_line(existing: &str) -> Result<String, String> {
+pub fn merge_status_line(existing: &str, command: &str) -> Result<String, String> {
     let mut root = parse_root(existing)?;
     if root.is_null() {
         root = Value::Object(Map::new());
@@ -12,10 +12,26 @@ pub fn merge_status_line(existing: &str) -> Result<String, String> {
     }
     root["statusLine"] = serde_json::json!({
         "type": "command",
-        "command": "claude-hud render",
+        "command": command,
         "refreshInterval": 5
     });
     pretty(&root)
+}
+
+/// statusLine 命令：当前可执行文件完整路径 + render。
+/// Windows 用正斜杠——Claude Code 以 bash 执行 statusLine，反斜杠路径会被
+/// 当作转义序列，且 bash 无法解析裸名 .cmd（本地 stub 模式），
+/// 完整 exe 路径两者都规避。
+pub fn default_status_line_command() -> String {
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "claude-hud".to_string());
+    let exe = if cfg!(windows) {
+        exe.replace('\\', "/")
+    } else {
+        exe
+    };
+    format!("{} render", exe)
 }
 
 /// Remove the Claude HUD statusLine key from settings.json content.
@@ -108,14 +124,14 @@ mod tests {
 
     #[test]
     fn merge_empty_input_creates_status_line() {
-        let out = merge_status_line("").unwrap();
+        let out = merge_status_line("", "claude-hud render").unwrap();
         assert!(out.contains(EXPECTED_COMMAND));
         assert!(out.contains("\"statusLine\""));
     }
 
     #[test]
     fn merge_preserves_existing_keys() {
-        let out = merge_status_line(r#"{"apiKeyHelper":{"alwaysAllowedTools":[]}}"#).unwrap();
+        let out = merge_status_line(r#"{"apiKeyHelper":{"alwaysAllowedTools":[]}}"#, "claude-hud render").unwrap();
         let root: Value = serde_json::from_str(&out).unwrap();
         assert!(root.get("apiKeyHelper").is_some());
         assert!(root.get("statusLine").is_some());
@@ -125,7 +141,7 @@ mod tests {
 
     #[test]
     fn merge_replaces_existing_status_line_without_duplication() {
-        let out = merge_status_line(r#"{"statusLine":{"type":"command","command":"old-cmd","refreshInterval":1}}"#).unwrap();
+        let out = merge_status_line(r#"{"statusLine":{"type":"command","command":"old-cmd","refreshInterval":1}}"#, "claude-hud render").unwrap();
         let root: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(root["statusLine"]["command"], "claude-hud render");
         assert_eq!(root.as_object().unwrap().get("statusLine").unwrap().as_object().unwrap().len(), 3);
@@ -133,7 +149,7 @@ mod tests {
 
     #[test]
     fn merge_invalid_json_returns_err() {
-        assert!(merge_status_line("{not json").is_err());
+        assert!(merge_status_line("{not json", "claude-hud render").is_err());
     }
 
     #[test]
@@ -159,14 +175,30 @@ mod tests {
 
     #[test]
     fn merge_non_object_root_returns_err() {
-        assert!(merge_status_line("[1,2,3]").is_err());
-        assert!(merge_status_line("\"foo\"").is_err());
+        assert!(merge_status_line("[1,2,3]", "claude-hud render").is_err());
+        assert!(merge_status_line("\"foo\"", "claude-hud render").is_err());
     }
 
     #[test]
     fn merge_null_root_is_treated_as_empty_object() {
-        let out = merge_status_line("null").unwrap();
+        let out = merge_status_line("null", "claude-hud render").unwrap();
         assert!(out.contains("\"statusLine\""));
+    }
+
+    #[test]
+    fn merge_uses_given_command() {
+        let out = merge_status_line("", "D:/hud/claude-hud.exe render").unwrap();
+        assert!(out.contains("\"command\": \"D:/hud/claude-hud.exe render\""));
+    }
+
+    #[test]
+    fn default_status_line_command_has_exe_and_render() {
+        let cmd = default_status_line_command();
+        assert!(cmd.ends_with(" render"), "got: {}", cmd);
+        assert!(cmd.contains("claude-hud"), "got: {}", cmd);
+        if cfg!(windows) {
+            assert!(!cmd.contains('\\'), "windows path must use forward slashes: {}", cmd);
+        }
     }
 
     #[test]
